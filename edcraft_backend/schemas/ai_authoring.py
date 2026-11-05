@@ -10,6 +10,7 @@ from edcraft_validator.application.authoring_api import (
 )
 from edcraft_validator.application.authoring_contracts import (
     AuthoringProgress,
+    AuthoringResult,
     DifficultyOutcome,
     RelevanceOutcome,
 )
@@ -359,6 +360,24 @@ class GeneratedQuestionsBatch(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class WorkerResultRequest(BaseModel):
+    """One token-authenticated final result from a Nomad worker."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    library_revision: str = Field(min_length=1, max_length=64)
+    report: AuthoringResult
+
+
+class WorkerErrorRequest(BaseModel):
+    """One token-authenticated fatal worker error."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    code: str = Field(min_length=1, max_length=80)
+    message: str = Field(min_length=1, max_length=2000)
+
+
 __all__ = [
     "ApprovalRequest",
     "ApprovalResponse",
@@ -382,4 +401,6 @@ __all__ = [
     "StoredReviewerApproval",
     "SubmitAuthoringJobRequest",
     "ValidationLimits",
+    "WorkerErrorRequest",
+    "WorkerResultRequest",
 ]

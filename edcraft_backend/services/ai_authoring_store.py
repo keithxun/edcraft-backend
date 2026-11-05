@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import hmac
 import logging
 import os
 import tempfile
@@ -127,6 +128,12 @@ class StoredJob(BaseModel):
     updated_at: datetime
     started_at: datetime | None = None
     finished_at: datetime | None = None
+    # Optional Nomad worker channel. Older records load with all fields None.
+    nomad_job_id: str | None = None
+    worker_token_hash: str | None = None
+    worker_token_expires_at: datetime | None = None
+    worker_context_issued_at: datetime | None = None
+    worker_revision: str | None = None
 
 
 def require_bound_report(
@@ -272,6 +279,89 @@ class AuthoringStore:
             return job.model_copy(update={"state": "running", "started_at": now, "updated_at": now})
 
         return self._mutate(job_id, mutate)
+
+    def set_worker_channel(
+        self,
+        job_id: UUID,
+        token_hash: str,
+        expires_at: datetime,
+        nomad_job_id: str,
+    ) -> StoredJob:
+        """Persist only the callback token hash and its Nomad job identity."""
+
+        def mutate(job: StoredJob) -> StoredJob:
+            return job.model_copy(
+                update={
+                    "nomad_job_id": nomad_job_id,
+                    "worker_token_hash": token_hash,
+                    "worker_token_expires_at": expires_at,
+                    "updated_at": _now(),
+                }
+            )
+
+        return self._mutate(job_id, mutate)
+
+    def get_job_by_worker_token(self, token_hash: str) -> StoredJob:
+        """Resolve one job by callback token hash with a constant-time compare."""
+        with self._lock:
+            job = self._find_by_token_unlocked(token_hash)
+            if job is None:
+                raise AuthoringNotFound("Authoring worker token is invalid.")
+            return job
+
+    def mark_worker_context_issued(self, job_id: UUID) -> StoredJob:
+        """Record that the worker fetched its credential context."""
+
+        def mutate(job: StoredJob) -> StoredJob:
+            now = _now()
+            return job.model_copy(
+                update={
+                    "worker_context_issued_at": now,
+                    "worker_revision": job.library_revision,
+                    "updated_at": now,
+                }
+            )
+
+        return self._mutate(job_id, mutate)
+
+    def update_progress_by_token(
+        self, token_hash: str, progress: AuthoringProgress
+    ) -> StoredJob:
+        """Persist progress for a running job identified by its token hash."""
+        with self._lock:
+            job = self._find_by_token_unlocked(token_hash)
+            if job is None:
+                raise AuthoringNotFound("Authoring worker token is invalid.")
+            if job.state != "running":
+                return job
+            updated = job.model_copy(
+                update={"progress": progress, "updated_at": _now()}
+            )
+            self._write_job_unlocked(updated)
+            return updated
+
+    def fail_by_token(
+        self, token_hash: str, error: PublicAuthoringError
+    ) -> StoredJob:
+        """Fail an active job identified by its token hash."""
+        with self._lock:
+            job = self._find_by_token_unlocked(token_hash)
+            if job is None:
+                raise AuthoringNotFound("Authoring worker token is invalid.")
+            if job.state not in {"queued", "running"}:
+                raise AuthoringConflict("Authoring job is already finished.")
+            now = _now()
+            updated = job.model_copy(
+                update={
+                    "state": "failed",
+                    "progress": None,
+                    "error": error,
+                    "updated_at": now,
+                    "finished_at": now,
+                }
+            )
+            self._write_job_unlocked(updated)
+            return updated
 
     def update_progress(self, job_id: UUID, progress: AuthoringProgress) -> None:
         """Persist the latest phase/attempt while a job is running."""
@@ -469,6 +559,22 @@ class AuthoringStore:
                 return job
             self._write_job_unlocked(updated)
             return updated
+
+    def _find_by_token_unlocked(self, token_hash: str) -> StoredJob | None:
+        """Scan job records for a matching hash while the lock is already held."""
+        if not token_hash:
+            return None
+        for path in self.jobs_dir.glob("*.json"):
+            try:
+                job = StoredJob.model_validate_json(path.read_bytes())
+            except (OSError, ValidationError, ValueError):
+                logger.warning("Ignoring unreadable authoring job record")
+                continue
+            if job.worker_token_hash and hmac.compare_digest(
+                job.worker_token_hash, token_hash
+            ):
+                return job
+        return None
 
     def _load_job(self, job_id: UUID) -> StoredJob:
         path = self._job_path(job_id)

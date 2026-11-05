@@ -13,6 +13,7 @@ from edcraft_backend.dependencies import get_ai_authoring_service
 from edcraft_backend.exceptions import EdCraftBaseException
 from edcraft_backend.routers import (
     ai_authoring,
+    ai_authoring_worker,
     assessment_templates,
     assessments,
     auth,
@@ -88,6 +89,7 @@ app.include_router(input_generator.router)
 app.include_router(question_generation.router)
 app.include_router(jobs.router)
 app.include_router(ai_authoring.router)
+app.include_router(ai_authoring_worker.router)
 app.include_router(provider_connections.router)
 app.include_router(users.router)
 app.include_router(auth.router)

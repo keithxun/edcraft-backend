@@ -3,7 +3,7 @@
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import (
     BaseModel,
@@ -229,6 +229,35 @@ class AuthoringSettings(BaseSettings):
     max_queue: int = Field(default=40, ge=0, le=100)
     max_quantity: int = Field(default=50, ge=1, le=50)
     shutdown_timeout_seconds: float = Field(default=30.0, gt=0)
+    executor: Literal["inline", "nomad"] = Field(
+        default="inline",
+        description="Execution mode for AI authoring: in-process or Nomad batch jobs.",
+    )
+    worker_token_ttl_seconds: int = Field(
+        default=7200,
+        gt=0,
+        description="Lifetime of a Nomad worker callback token.",
+    )
+    job_timeout_seconds: float = Field(
+        default=1800.0,
+        gt=0,
+        description="Maximum time to wait for a Nomad authoring worker.",
+    )
+    nomad_container_image: str | None = Field(
+        default=None,
+        description="Worker image; falls back to NOMAD_CONTAINER_IMAGE.",
+    )
+    nomad_callback_base_url: str | None = Field(
+        default=None,
+        description=(
+            "Backend base URL reachable from workers; "
+            "falls back to NOMAD_CALLBACK_BASE_URL."
+        ),
+    )
+    nomad_force_pull: bool = Field(
+        default=False,
+        description="Force Nomad to pull the worker image before starting.",
+    )
     model_profiles: list[AuthoringProfileSettings] = Field(default_factory=list)
     encryption_key: SecretStr | None = Field(
         default=None,

@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-from datetime import UTC, datetime
+import os
+import secrets
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -14,6 +16,7 @@ from edcraft_validator.application.authoring_api import (
     PublicAuthoringError,
 )
 from edcraft_validator.application.authoring_contracts import (
+    AuthoringProgress,
     AuthoringResult,
     GenerationAttempt,
 )
@@ -34,8 +37,16 @@ from edcraft_validator.llm.judge_configuration import load_judge_settings
 from edcraft_validator.llm.llm_contracts import TemplateProviderSelection
 from pydantic import ValidationError
 
-from edcraft_backend.config.settings import AuthoringProfileSettings, AuthoringSettings
+from edcraft_backend.config.settings import (
+    AuthoringProfileSettings,
+    AuthoringSettings,
+    NomadSettings,
+)
 from edcraft_backend.exceptions import EdCraftBaseException
+from edcraft_backend.executors.nomad_authoring import (
+    AUTHORING_JOB_PREFIX,
+    NomadAuthoringExecutor,
+)
 from edcraft_backend.schemas.ai_authoring import (
     ApprovalRequest,
     ApprovalResponse,
@@ -66,7 +77,12 @@ from edcraft_backend.services.ai_authoring_providers import (
     ModelPlan,
     ProviderCredentials,
 )
-from edcraft_backend.services.ai_authoring_runner import AuthoringRunner, JobExecutor
+from edcraft_backend.services.ai_authoring_runner import (
+    AuthoringRunner,
+    JobExecutor,
+    RemoteJobExecutor,
+    WorkerChannel,
+)
 from edcraft_backend.services.ai_authoring_store import (
     ApprovalRecord,
     AuthoringConflict,
@@ -83,7 +99,7 @@ ApprovalView = StoredReviewerApproval
 
 logger = logging.getLogger(__name__)
 
-LIBRARY_REVISION = "a9ae1a087c0c678b1207479d637a72e42e158adf"
+LIBRARY_REVISION = "0392a726dac501e4f5ec4f2f3ea741d9785a3375"
 MAX_FINDING_TEXT = 2_000
 
 
@@ -92,6 +108,18 @@ class AuthoringValidationError(EdCraftBaseException):
 
     def __init__(self, message: str) -> None:
         super().__init__(message, 422)
+
+
+class AuthoringWorkerUnauthorized(EdCraftBaseException):
+    """The worker callback token is unknown or expired (HTTP 401)."""
+
+    def __init__(self) -> None:
+        super().__init__("Authoring worker token is invalid or expired.", 401)
+
+
+def hash_worker_token(token: str) -> str:
+    """Return the only representation of a worker token that may be stored."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 class AiAuthoringService:
@@ -103,10 +131,54 @@ class AiAuthoringService:
         *,
         store: AuthoringStore | None = None,
         executor: JobExecutor | None = None,
+        remote_executor: RemoteJobExecutor | None = None,
+        nomad_settings: NomadSettings | None = None,
     ) -> None:
         self.settings = settings
         self.store = store or AuthoringStore(settings)
-        self.runner = AuthoringRunner(self.store, settings, executor)
+        self._worker_plans: dict[UUID, JobModelPlan] = {}
+        self._worker_commands: dict[UUID, dict[str, Any]] = {}
+        self._remote_mode = settings.executor == "nomad" and executor is None
+        resolved_remote = remote_executor if self._remote_mode else None
+        if self._remote_mode and resolved_remote is None:
+            resolved_remote = self._build_nomad_executor(nomad_settings)
+        self.runner = AuthoringRunner(
+            self.store,
+            settings,
+            executor,
+            remote_executor=resolved_remote,
+            job_timeout_seconds=settings.job_timeout_seconds,
+            on_remote_finished=self._discard_worker_context,
+        )
+
+    def _build_nomad_executor(
+        self, nomad_settings: NomadSettings | None
+    ) -> NomadAuthoringExecutor:
+        """Build the production executor from Nomad + authoring settings."""
+        if nomad_settings is None:
+            from edcraft_backend.config import settings as app_settings
+
+            nomad_settings = app_settings.nomad
+        return NomadAuthoringExecutor(
+            host=nomad_settings.host,
+            port=nomad_settings.port,
+            token=nomad_settings.token,
+            namespace=nomad_settings.namespace,
+            datacenters=list(nomad_settings.datacenters),
+            cpu_mhz=nomad_settings.cpu_mhz,
+            memory_mb=nomad_settings.memory_mb,
+            container_image=(
+                self.settings.nomad_container_image
+                or nomad_settings.container_image
+            ),
+            force_pull=self.settings.nomad_force_pull,
+            library_revision=LIBRARY_REVISION,
+        )
+
+    def _discard_worker_context(self, job_id: UUID) -> None:
+        """Drop in-memory credentials once a remote job is terminal."""
+        self._worker_plans.pop(job_id, None)
+        self._worker_commands.pop(job_id, None)
 
     async def startup(self) -> None:
         """Prepare durable storage, reconcile interruptions and bind the runner."""
@@ -250,9 +322,47 @@ class AiAuthoringService:
         except Exception:
             await self.runner.release(owner_id)
             raise
+
+        worker_channel: WorkerChannel | None = None
+        if self._remote_mode:
+            raw_token = secrets.token_urlsafe(32)
+            nomad_job_id = f"{AUTHORING_JOB_PREFIX}{job_id}"
+            expires_at = now + timedelta(
+                seconds=self.settings.worker_token_ttl_seconds
+            )
+            try:
+                job = await asyncio.to_thread(
+                    self.store.set_worker_channel,
+                    job_id,
+                    hash_worker_token(raw_token),
+                    expires_at,
+                    nomad_job_id,
+                )
+            except Exception:
+                await asyncio.to_thread(
+                    self.store.fail_job,
+                    job_id,
+                    PublicAuthoringError(
+                        code="AUTHORING_FAILED",
+                        message="Authoring could not be scheduled.",
+                    ),
+                )
+                await self.runner.release(owner_id)
+                raise
+            worker_channel = self._worker_channel(raw_token)
+            self._worker_plans[job_id] = plan
+            self._worker_commands[job_id] = command.model_dump(mode="json")
+
         try:
-            self.runner.start_job(job_id, command, plan, owner_id)
+            self.runner.start_job(
+                job_id,
+                command,
+                plan,
+                owner_id,
+                worker_channel=worker_channel,
+            )
         except Exception:
+            self._discard_worker_context(job_id)
             await asyncio.to_thread(
                 self.store.fail_job,
                 job_id,
@@ -274,6 +384,147 @@ class AiAuthoringService:
     async def wait_for_idle(self) -> None:
         """Expose deterministic completion to focused tests."""
         await self.runner.wait_for_idle()
+
+    async def worker_context(self, token: str) -> dict[str, Any]:
+        """Return the command and decrypted plan for one authenticated worker."""
+        job = await self._require_worker_job(token)
+        if job.state not in {"queued", "running"}:
+            raise AuthoringConflict("Authoring job is already finished.")
+        command = self._worker_commands.get(job.job_id)
+        plan = self._worker_plans.get(job.job_id)
+        if command is None or plan is None:
+            raise AuthoringConflict("Authoring worker context is no longer available.")
+        await asyncio.to_thread(self.store.mark_worker_context_issued, job.job_id)
+        return {
+            "job_id": str(job.job_id),
+            "library_revision": LIBRARY_REVISION,
+            "timeout_seconds": self.settings.job_timeout_seconds,
+            "command": command,
+            "plan": self._context_plan(plan),
+        }
+
+    async def update_worker_progress(
+        self, token: str, progress: AuthoringProgress
+    ) -> None:
+        """Persist best-effort worker progress without exposing the raw token."""
+        job = await self._require_worker_job(token)
+        if job.state not in {"queued", "running"}:
+            return
+        await asyncio.to_thread(
+            self.store.update_progress_by_token,
+            hash_worker_token(token),
+            progress,
+        )
+
+    async def complete_worker_result(
+        self, token: str, report: AuthoringResult
+    ) -> None:
+        """Resolve the runner future; the runner persists the single result."""
+        job = await self._require_worker_job(token)
+        if job.state == "completed":
+            await self._require_matching_worker_report(job.job_id, report)
+            return
+        if job.state == "failed":
+            raise AuthoringConflict("Authoring job already failed.")
+        resolution = self.runner.resolve(job.job_id, report)
+        if resolution in {"accepted", "duplicate"}:
+            return
+        refreshed = await asyncio.to_thread(self.store.get_job, job.job_id)
+        if refreshed.state == "completed":
+            await self._require_matching_worker_report(job.job_id, report)
+            return
+        raise AuthoringConflict("Authoring job is not awaiting a worker result.")
+
+    async def fail_worker_job(self, token: str, error: PublicAuthoringError) -> None:
+        """Reject the runner future with a worker-reported fatal error."""
+        job = await self._require_worker_job(token)
+        if job.state in {"completed", "failed"}:
+            raise AuthoringConflict("Authoring job is already finished.")
+        resolution = self.runner.reject(job.job_id, error)
+        if resolution == "accepted":
+            return
+        refreshed = await asyncio.to_thread(self.store.get_job, job.job_id)
+        if refreshed.state in {"completed", "failed"}:
+            raise AuthoringConflict("Authoring job is already finished.")
+        raise AuthoringConflict("Authoring job is not awaiting a worker result.")
+
+    async def _require_worker_job(self, token: str) -> StoredJob:
+        try:
+            job = await asyncio.to_thread(
+                self.store.get_job_by_worker_token, hash_worker_token(token)
+            )
+        except AuthoringNotFound as exc:
+            raise AuthoringWorkerUnauthorized() from exc
+        expires_at = job.worker_token_expires_at
+        if expires_at is None or expires_at <= _now():
+            raise AuthoringWorkerUnauthorized()
+        return job
+
+    async def _require_matching_worker_report(
+        self, job_id: UUID, report: AuthoringResult
+    ) -> None:
+        try:
+            stored = await asyncio.to_thread(self.store.read_report, job_id)
+        except AuthoringConflict as exc:
+            raise AuthoringConflict(
+                "Authoring job is already finished with different evidence."
+            ) from exc
+        if stored.model_dump(mode="json") != report.model_dump(mode="json"):
+            raise AuthoringConflict(
+                "Authoring job is already completed with a different result."
+            )
+
+    def _worker_channel(self, token: str) -> WorkerChannel:
+        base_url = self.settings.nomad_callback_base_url
+        if not base_url:
+            from edcraft_backend.config import settings as app_settings
+
+            base_url = app_settings.nomad.callback_base_url
+        prefix = f"{base_url.rstrip('/')}/ai-authoring/worker/{token}"
+        return WorkerChannel(
+            token=token,
+            context_url=f"{prefix}/context",
+            progress_url=f"{prefix}/progress",
+            callback_url=f"{prefix}/result",
+            error_url=f"{prefix}/error",
+        )
+
+    def _context_plan(self, plan: JobModelPlan) -> dict[str, dict[str, Any]]:
+        return {
+            "author": self._role_context(plan.author),
+            "difficulty": self._role_context(plan.difficulty),
+            "relevance": self._role_context(plan.relevance),
+        }
+
+    def _role_context(self, role: ModelPlan) -> dict[str, Any]:
+        credentials = role.credentials or self._server_role_credentials(role)
+        return {
+            "provider": credentials.provider,
+            "model": credentials.model,
+            "api_key": credentials.api_key,
+            "base_url": credentials.base_url,
+            "timeout_seconds": credentials.timeout_seconds,
+        }
+
+    def _server_role_credentials(self, role: ModelPlan) -> ProviderCredentials:
+        """Read a server-profile key from the environment only for Nomad mode."""
+        provider = role.selection.provider
+        model = role.selection.model
+        if model is None:
+            raise AuthoringValidationError("Choose a model for the server profile.")
+        prefix = provider.upper()
+        api_key = os.getenv(f"{prefix}_API_KEY", "").strip()
+        if not api_key:
+            raise AuthoringValidationError(
+                f"Server credentials for {provider} are not configured."
+            )
+        base_url = os.getenv(f"{prefix}_BASE_URL") or None
+        return ProviderCredentials(
+            provider=provider,
+            model=model,
+            api_key=api_key,
+            base_url=base_url.strip() if base_url else None,
+        )
 
     async def review(self, owner_id: UUID, job_id: UUID) -> AuthoringReviewResponse:
         """Return sanitized evidence sufficient for an educator decision."""
@@ -639,5 +890,7 @@ __all__ = [
     "AuthoringNotFound",
     "AuthoringStorageUnavailable",
     "AuthoringValidationError",
+    "AuthoringWorkerUnauthorized",
     "LIBRARY_REVISION",
+    "hash_worker_token",
 ]

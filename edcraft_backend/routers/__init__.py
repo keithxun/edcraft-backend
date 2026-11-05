@@ -1,6 +1,7 @@
 """Router exports."""
 
 from edcraft_backend.routers import (
+    ai_authoring_worker,
     assessment_templates,
     assessments,
     folders,
@@ -14,6 +15,7 @@ from edcraft_backend.routers import (
 )
 
 __all__ = [
+    "ai_authoring_worker",
     "assessment_templates",
     "assessments",
     "folders",
