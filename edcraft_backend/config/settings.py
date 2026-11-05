@@ -245,7 +245,10 @@ class AuthoringSettings(BaseSettings):
     )
     nomad_container_image: str | None = Field(
         default=None,
-        description="Worker image; falls back to NOMAD_CONTAINER_IMAGE.",
+        description=(
+            "Authoring worker image. Required when executor is 'nomad'; there is "
+            "no fallback to the builder's NOMAD_CONTAINER_IMAGE."
+        ),
     )
     nomad_callback_base_url: str | None = Field(
         default=None,

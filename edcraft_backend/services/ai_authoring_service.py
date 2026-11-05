@@ -139,9 +139,18 @@ class AiAuthoringService:
         self._worker_plans: dict[UUID, JobModelPlan] = {}
         self._worker_commands: dict[UUID, dict[str, Any]] = {}
         self._remote_mode = settings.executor == "nomad" and executor is None
+        self._remote_configuration_error: str | None = None
         resolved_remote = remote_executor if self._remote_mode else None
         if self._remote_mode and resolved_remote is None:
-            resolved_remote = self._build_nomad_executor(nomad_settings)
+            if settings.nomad_container_image:
+                resolved_remote = self._build_nomad_executor(nomad_settings)
+            else:
+                # Never fall back to the builder image: it has no
+                # ``edcraft_validator.worker`` module and would fail at runtime.
+                self._remote_configuration_error = (
+                    "AI authoring is not configured for Nomad execution: set "
+                    "AUTHORING_NOMAD_CONTAINER_IMAGE to the authoring worker image."
+                )
         self.runner = AuthoringRunner(
             self.store,
             settings,
@@ -159,6 +168,12 @@ class AiAuthoringService:
             from edcraft_backend.config import settings as app_settings
 
             nomad_settings = app_settings.nomad
+        image = self.settings.nomad_container_image
+        if image is None:  # Guarded by the caller; keeps the type narrow.
+            raise AuthoringValidationError(
+                "AI authoring is not configured for Nomad execution: set "
+                "AUTHORING_NOMAD_CONTAINER_IMAGE to the authoring worker image."
+            )
         return NomadAuthoringExecutor(
             host=nomad_settings.host,
             port=nomad_settings.port,
@@ -167,10 +182,7 @@ class AiAuthoringService:
             datacenters=list(nomad_settings.datacenters),
             cpu_mhz=nomad_settings.cpu_mhz,
             memory_mb=nomad_settings.memory_mb,
-            container_image=(
-                self.settings.nomad_container_image
-                or nomad_settings.container_image
-            ),
+            container_image=image,
             force_pull=self.settings.nomad_force_pull,
             library_revision=LIBRARY_REVISION,
         )
@@ -236,6 +248,8 @@ class AiAuthoringService:
         credentials: JobCredentials | None = None,
     ) -> StoredJob:
         """Admit and persist one queued authoring job."""
+        if self._remote_configuration_error is not None:
+            raise AuthoringValidationError(self._remote_configuration_error)
         resolved = credentials or JobCredentials()
         if request.connection_id is not None:
             if resolved.author is None:

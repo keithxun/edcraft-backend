@@ -24,6 +24,7 @@ from httpx import ASGITransport, AsyncClient
 from edcraft_backend.config.settings import (
     AuthoringProfileSettings,
     AuthoringSettings,
+    NomadSettings,
 )
 from edcraft_backend.dependencies import (
     get_ai_authoring_service,
@@ -141,6 +142,7 @@ async def nomad_env(
     executor: str = "nomad",
     remote: FakeRemoteExecutor | None = None,
     inline_executor: Any = None,
+    nomad_settings: NomadSettings | None = None,
     job_timeout_seconds: float = 5.0,
     max_active_jobs: int = 2,
     max_active_jobs_per_user: int = 2,
@@ -164,6 +166,7 @@ async def nomad_env(
         settings,
         executor=inline_executor,
         remote_executor=remote if executor == "nomad" else None,
+        nomad_settings=nomad_settings,
     )
     await service.startup()
     user = FakeUser(uuid4())
@@ -557,6 +560,23 @@ async def test_timeout_stops_nomad_job_and_releases_admission(
         # The single admission slot must be free again.
         second = await submit(env)
         assert env.service.store.get_job(second).state in {"queued", "running"}
+
+
+@pytest.mark.asyncio
+async def test_missing_authoring_image_rejects_submission(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("AUTHORING_NOMAD_CONTAINER_IMAGE", raising=False)
+    builder = NomadSettings(container_image="registry.test/edcraft-engine:latest")
+    async with nomad_env(tmp_path, nomad_settings=builder) as env:
+        response = await env.client.post("/ai-authoring/jobs", json=payload())
+
+        assert response.status_code == 422, response.text
+        detail = response.json()["detail"]
+        assert "AUTHORING_NOMAD_CONTAINER_IMAGE" in detail
+        assert "not configured" in detail
+        # The rejected request must not create a record or hold admission.
+        assert env.service.store.list_jobs(env.user.id) == []
 
 
 @pytest.mark.asyncio

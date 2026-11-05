@@ -14,13 +14,19 @@ to submit one Nomad batch allocation per admitted authoring job.
 | `AUTHORING_EXECUTOR` | `inline` | `inline` or `nomad`. |
 | `AUTHORING_WORKER_TOKEN_TTL_SECONDS` | `7200` | Callback token lifetime. |
 | `AUTHORING_JOB_TIMEOUT_SECONDS` | `1800` | Runner wait before timeout. |
-| `AUTHORING_NOMAD_CONTAINER_IMAGE` | `NOMAD_CONTAINER_IMAGE` | Worker image. |
+| `AUTHORING_NOMAD_CONTAINER_IMAGE` | required in Nomad mode | Authoring worker image; no builder-image fallback. |
 | `AUTHORING_NOMAD_CALLBACK_BASE_URL` | `NOMAD_CALLBACK_BASE_URL` | Worker-to-backend URL. |
 | `AUTHORING_NOMAD_FORCE_PULL` | `false` | Force image pull per job. |
 
 `AUTHORING_MAX_ACTIVE_JOBS`, per-user limits, queueing and admission are
 unchanged. The store and pending futures are process-local, so the backend
 remains a single replica.
+
+`AUTHORING_NOMAD_CONTAINER_IMAGE` is mandatory in Nomad mode. It deliberately
+does **not** fall back to `NOMAD_CONTAINER_IMAGE` (the builder engine image):
+that image has no `edcraft_validator.worker` module. When the authoring image is
+unset, `POST /ai-authoring/jobs` returns `422` before admission, the store is
+untouched, and no Nomad job is submitted.
 
 ## Flow
 
