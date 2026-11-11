@@ -74,7 +74,7 @@ ApprovalView = StoredReviewerApproval
 logger = logging.getLogger(__name__)
 
 # Must match [tool.uv.sources].edcraft-validator.rev in pyproject.toml.
-LIBRARY_REVISION = "a5a972e6a81ee724ebb7f79ca14ebe011e5cb4d7"
+LIBRARY_REVISION = "7dd573a59ac31b015f3e9e7db52465cf507af4dc"
 MAX_FINDING_TEXT = 2_000
 
 
@@ -233,12 +233,13 @@ class AiAuthoringService:
         ]
         checks = attempts[-1].checks if attempts else []
         candidate = attempts[-1].candidate if attempts else None
-        template = _template_view(artifact)
+        template = _template_view(artifact, domain)
         limits = _limits(artifact) if artifact is not None else None
         summary = job.result
         return AuthoringReviewResponse(
             job_id=job.job_id,
             state=job.state,
+            domain=job.request.domain,
             artifact_id=job.artifact_id,
             artifact_sha256=job.artifact_sha256,
             library_revision=job.library_revision,
@@ -507,7 +508,9 @@ def _validated_artifact(domain: DomainModule, artifact_bytes: bytes) -> Validate
         raise AuthoringConflict("The stored artifact is not usable.") from exc
 
 
-def _template_view(artifact: ValidatedTemplateArtifact | None) -> ReviewTemplate | None:
+def _template_view(
+    artifact: ValidatedTemplateArtifact | None, domain: DomainModule
+) -> ReviewTemplate | None:
     if artifact is None:
         return None
     template = getattr(artifact, "template", None)
@@ -518,8 +521,14 @@ def _template_view(artifact: ValidatedTemplateArtifact | None) -> ReviewTemplate
     return ReviewTemplate(
         template_id=template_id,
         candidate=candidate,
-        language=getattr(template, "language", None),
+        language=_template_language(domain),
     )
+
+
+def _template_language(domain: DomainModule) -> str | None:
+    """Read the optional review label without requiring it from older domains."""
+    field = "template_language"
+    return getattr(domain, field, None)
 
 
 _LIMIT_FIELDS = (
@@ -538,18 +547,16 @@ def _limits(artifact: ValidatedTemplateArtifact) -> ValidationLimits | None:
     if validation is None:
         return None
     # Domains record different budgets: code samples examples and executions,
-    # math enumerates a bounded combination domain. Project only attributes the
-    # validation summary actually carries so neither mode raises here.
-    budgets = {
-        field: getattr(validation, field, None)
-        for field in _LIMIT_FIELDS
-        if hasattr(validation, field)
-    }
+    # math enumerates a bounded combination domain. Project only what the
+    # summary carries so neither mode raises here.
+    recorded = validation.model_dump()
+    if not {"validator_version", "checking_mode", "seed"} <= recorded.keys():
+        return None
     return ValidationLimits(
-        validator_version=validation.validator_version,
-        checking_mode=validation.checking_mode,
-        seed=validation.seed,
-        **budgets,
+        validator_version=recorded["validator_version"],
+        checking_mode=recorded["checking_mode"],
+        seed=recorded["seed"],
+        **{field: recorded.get(field) for field in _LIMIT_FIELDS},
     )
 
 

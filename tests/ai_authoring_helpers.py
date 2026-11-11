@@ -196,6 +196,7 @@ class StubDomain:
     candidate_model = StubCandidate
     validated_model = StubValidatedTemplate
     question_model = StubQuestion
+    template_language = None
 
     def generate_question(self, validated: Any, *, seed: int) -> StubQuestion:
         if not isinstance(validated, StubValidatedTemplate):
@@ -538,14 +539,12 @@ def make_math_checked_report(command: AuthoringJobCommand) -> AuthoringResult:
                 advisory=True,
                 template_sha256=checked_digest,
                 difficulty_outcome={
-                    "assessment_path": "reasoning",
+                    "assessment_path": "decision",
                     "requested_difficulty": "easy",
                     "estimated_difficulty": "easy",
-                    "confidence": 0.55,
-                    "confidence_source": "self_reported",
                     "decision": "matches",
                     "status": "passed",
-                    "reason": "Provisional heuristic estimate; not calibrated.",
+                    "reason": "Provisional deterministic heuristic; not calibrated.",
                 },
             ),
         ),

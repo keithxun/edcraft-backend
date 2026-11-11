@@ -236,15 +236,6 @@ async def test_capabilities_reflect_the_domain_registry(
 
 
 @pytest.mark.asyncio
-async def test_capabilities_report_code_and_math_domains(checked_env: AuthoringHarness) -> None:
-    response = await checked_env.client.get("/ai-authoring/capabilities")
-    assert response.status_code == 200
-    enabled = response.json()["enabled_domains"]
-    assert "code" in enabled
-    assert "math" in enabled
-
-
-@pytest.mark.asyncio
 async def test_review_preview_approval_and_generation_flow(checked_env: AuthoringHarness) -> None:
     env = checked_env
     job_id = await complete_job(env)
@@ -255,7 +246,9 @@ async def test_review_preview_approval_and_generation_flow(checked_env: Authorin
     envelope = await review(env, job_id)
     digest = envelope["artifact_sha256"]
     assert envelope["artifact_id"] == status["result"]["artifact_id"]
+    assert envelope["domain"] == "code"
     assert envelope["request"]["prompt"] == payload()["prompt"]
+    assert envelope["template"]["language"] == "python"
     assert envelope["template"]["candidate"]["code"].startswith("def calculate")
     assert envelope["template"]["candidate"]["question_template"]
     assert envelope["template"]["candidate"]["distractors"]
@@ -451,6 +444,7 @@ async def test_math_domain_round_trips_through_the_real_service(tmp_path: Path) 
         assert listed[0]["domain"] == "math"
 
         envelope = await review(env, job_id)
+        assert envelope["domain"] == "math"
         assert envelope["request"]["domain"] == "math"
         assert envelope["template"]["template_id"] == "math.easy.linear_equation"
         assert envelope["template"]["language"] is None

@@ -276,6 +276,7 @@ class AuthoringReviewResponse(BaseModel):
 
     job_id: UUID
     state: Literal["queued", "running", "completed", "failed"]
+    domain: str
     artifact_id: str | None = None
     artifact_sha256: Sha256 | None = None
     library_revision: str
