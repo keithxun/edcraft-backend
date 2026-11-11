@@ -30,6 +30,7 @@ from edcraft_validator.domains.code.code_schemas import (
     ValidatedCodeTemplate,
 )
 from edcraft_validator.domains.domain_registry import create_domain
+from edcraft_validator.domains.domain_support import build_review_view
 from edcraft_validator.domains.math.candidate_builder import template_sha256
 from edcraft_validator.domains.math.math_schemas import (
     MathQuestionInstance,
@@ -197,6 +198,9 @@ class StubDomain:
     validated_model = StubValidatedTemplate
     question_model = StubQuestion
     template_language = None
+
+    def review_view(self, artifact: ValidatedTemplateArtifact):
+        return build_review_view(artifact, language=self.template_language)
 
     def generate_question(self, validated: Any, *, seed: int) -> StubQuestion:
         if not isinstance(validated, StubValidatedTemplate):

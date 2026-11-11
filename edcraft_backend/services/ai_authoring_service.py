@@ -74,7 +74,7 @@ ApprovalView = StoredReviewerApproval
 logger = logging.getLogger(__name__)
 
 # Must match [tool.uv.sources].edcraft-validator.rev in pyproject.toml.
-LIBRARY_REVISION = "7dd573a59ac31b015f3e9e7db52465cf507af4dc"
+LIBRARY_REVISION = "637a11b2d7544c44dff1173138be78d2b00a848d"
 MAX_FINDING_TEXT = 2_000
 
 
@@ -233,8 +233,17 @@ class AiAuthoringService:
         ]
         checks = attempts[-1].checks if attempts else []
         candidate = attempts[-1].candidate if attempts else None
-        template = _template_view(artifact, domain)
-        limits = _limits(artifact) if artifact is not None else None
+        review = domain.review_view(artifact) if artifact is not None else None
+        template = (
+            ReviewTemplate(
+                template_id=review.template_id,
+                candidate=review.candidate,
+                language=review.language,
+            )
+            if review is not None
+            else None
+        )
+        limits = _limits(review.limits) if review is not None else None
         summary = job.result
         return AuthoringReviewResponse(
             job_id=job.job_id,
@@ -542,14 +551,10 @@ _LIMIT_FIELDS = (
 )
 
 
-def _limits(artifact: ValidatedTemplateArtifact) -> ValidationLimits | None:
-    validation = getattr(artifact, "validation", None)
-    if validation is None:
+def _limits(recorded: dict[str, Any] | None) -> ValidationLimits | None:
+    """Project the domain-owned validation summary into the response shape."""
+    if recorded is None:
         return None
-    # Domains record different budgets: code samples examples and executions,
-    # math enumerates a bounded combination domain. Project only what the
-    # summary carries so neither mode raises here.
-    recorded = validation.model_dump()
     if not {"validator_version", "checking_mode", "seed"} <= recorded.keys():
         return None
     return ValidationLimits(
