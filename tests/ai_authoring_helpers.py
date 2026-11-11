@@ -41,12 +41,14 @@ from edcraft_validator.domains.math.math_schemas import (
 from edcraft_validator.domains.math.math_types import (
     MATH_ANSWERS_TOOL,
     MATH_DIFFICULTY_TOOL,
-    MATH_RELEVANCE_TOOL,
     MATH_STRUCTURE_TOOL,
 )
 from edcraft_validator.domains.math.proposal_response import MathProposalResponse
 from edcraft_validator.llm.llm_contracts import PlannedGenerationResponse
+from edcraft_validator.mcp.client import FastMcpToolClient
+from edcraft_validator.mcp.server import create_validation_server
 from edcraft_validator.validation.check_contracts import ToolEvidence, ToolFinding
+from edcraft_validator.validation.check_names import TEMPLATE_RELEVANCE_CHECK
 from edcraft_validator.validation.validation_contracts import ValidationEvidence
 from pydantic import BaseModel, ConfigDict
 
@@ -134,7 +136,7 @@ MATH_CHECKS = (
     MATH_STRUCTURE_TOOL,
     MATH_ANSWERS_TOOL,
     MATH_DIFFICULTY_TOOL,
-    MATH_RELEVANCE_TOOL,
+    TEMPLATE_RELEVANCE_CHECK,
 )
 
 
@@ -262,14 +264,33 @@ class ScriptedMathProvider:
         )
 
 
+class ScriptedDecisions:
+    """Deterministic relevance classifier for model-free integration tests."""
+
+    provider = "stub"
+    model = "stub-decisions"
+    threshold = 0.5
+
+    def score(self, request_text: str, question_text: str) -> float:
+        return 1.0
+
+
 def run_scripted_math_pipeline(
     command: AuthoringJobCommand,
     credentials: object | None = None,
     on_progress: Callable[[AuthoringProgress], None] | None = None,
 ) -> AuthoringJobRecord:
     """Run the real math workflow with a scripted provider and real MCP checks."""
+    tool_client = FastMcpToolClient(
+        create_validation_server(decision_provider_factory=lambda: ScriptedDecisions())
+    )
+
+    def application_factory() -> TemplateApplication:
+        return TemplateApplication(tool_client=tool_client)
+
     return run_authoring_job_sync(
         command,
+        application_factory=application_factory,
         provider_factory=lambda selection: ScriptedMathProvider(),
         on_progress=on_progress,
     )
@@ -486,12 +507,12 @@ def make_math_checked_report(command: AuthoringJobCommand) -> AuthoringResult:
                 },
             ),
             ValidationEvidence(
-                check=MATH_RELEVANCE_TOOL,
+                check=TEMPLATE_RELEVANCE_CHECK,
                 status="passed",
                 details={
                     "advisory": True,
                     "tool_version": "1.0.0",
-                    "template_sha256": checked_digest,
+                    "subject_sha256": checked_digest,
                     "relevant": True,
                 },
             ),
@@ -553,15 +574,15 @@ def make_math_checked_report(command: AuthoringJobCommand) -> AuthoringResult:
             ),
         ),
         CheckExecution(
-            call_id=f"attempt-1:{MATH_RELEVANCE_TOOL}",
-            tool=MATH_RELEVANCE_TOOL,
+            call_id=f"attempt-1:{TEMPLATE_RELEVANCE_CHECK}",
+            tool=TEMPLATE_RELEVANCE_CHECK,
             advisory=True,
             requested_arguments={},
             evidence=_evidence(
-                MATH_RELEVANCE_TOOL,
+                TEMPLATE_RELEVANCE_CHECK,
                 "passed",
                 advisory=True,
-                template_sha256=checked_digest,
+                subject_sha256=checked_digest,
                 relevant=True,
             ),
         ),

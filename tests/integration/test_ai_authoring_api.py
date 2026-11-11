@@ -470,7 +470,7 @@ async def test_math_domain_round_trips_through_the_real_service(tmp_path: Path) 
             "math_verify_template_structure",
             "math_validate_answers_and_distractors",
             "math_assess_template_difficulty",
-            "math_assess_template_relevance",
+            "assess_template_relevance",
         ]
         assert [check["advisory"] for check in envelope["checks"]] == [
             False,
