@@ -250,17 +250,24 @@ class ReviewTemplate(BaseModel):
 
 
 class ValidationLimits(BaseModel):
-    """Sampled-check budget recorded by the AI library."""
+    """Check budget recorded by the AI library, whichever mode it used.
+
+    Code templates record a sampled budget; math templates record an exhaustive
+    bounded-combination budget. Fields for the other mode stay null so clients
+    can keep reading one stable response shape.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     validator_version: str
     checking_mode: str
-    examples_checked: int
-    execution_calls: int
-    max_examples: int
-    max_execution_calls: int
-    timeout_seconds: float
+    examples_checked: int | None = None
+    execution_calls: int | None = None
+    max_examples: int | None = None
+    max_execution_calls: int | None = None
+    timeout_seconds: float | None = None
+    combinations_checked: int | None = None
+    max_combinations: int | None = None
     seed: int
 
 

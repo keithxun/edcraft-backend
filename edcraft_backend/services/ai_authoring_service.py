@@ -74,7 +74,7 @@ ApprovalView = StoredReviewerApproval
 logger = logging.getLogger(__name__)
 
 # Must match [tool.uv.sources].edcraft-validator.rev in pyproject.toml.
-LIBRARY_REVISION = "783c32a2b3c186f669807a97e30d2fa9b9b3b744"
+LIBRARY_REVISION = "a5a972e6a81ee724ebb7f79ca14ebe011e5cb4d7"
 MAX_FINDING_TEXT = 2_000
 
 
@@ -522,19 +522,34 @@ def _template_view(artifact: ValidatedTemplateArtifact | None) -> ReviewTemplate
     )
 
 
+_LIMIT_FIELDS = (
+    "examples_checked",
+    "execution_calls",
+    "max_examples",
+    "max_execution_calls",
+    "timeout_seconds",
+    "combinations_checked",
+    "max_combinations",
+)
+
+
 def _limits(artifact: ValidatedTemplateArtifact) -> ValidationLimits | None:
     validation = getattr(artifact, "validation", None)
     if validation is None:
         return None
+    # Domains record different budgets: code samples examples and executions,
+    # math enumerates a bounded combination domain. Project only attributes the
+    # validation summary actually carries so neither mode raises here.
+    budgets = {
+        field: getattr(validation, field, None)
+        for field in _LIMIT_FIELDS
+        if hasattr(validation, field)
+    }
     return ValidationLimits(
         validator_version=validation.validator_version,
         checking_mode=validation.checking_mode,
-        examples_checked=validation.examples_checked,
-        execution_calls=validation.execution_calls,
-        max_examples=validation.max_examples,
-        max_execution_calls=validation.max_execution_calls,
-        timeout_seconds=validation.timeout_seconds,
         seed=validation.seed,
+        **budgets,
     )
 
 
