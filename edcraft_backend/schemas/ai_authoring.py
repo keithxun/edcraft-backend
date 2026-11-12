@@ -71,6 +71,14 @@ class AuthoringCapabilitiesResponse(BaseModel):
     min_distractors: int
     max_distractors: int
     default_distractors: int
+    check_pilot_timeout_seconds: float = Field(
+        gt=0,
+        allow_inf_nan=False,
+        description=(
+            "Combined check-pilot admission and request wall-clock bound in "
+            "seconds. Clients should allow a positive transport margin above it."
+        ),
+    )
 
 
 class AuthoringModelSelection(BaseModel):

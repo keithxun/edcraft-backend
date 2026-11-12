@@ -22,6 +22,7 @@ from httpx import ASGITransport, AsyncClient
 from edcraft_backend.config.settings import (
     AuthoringProfileSettings,
     AuthoringSettings,
+    CheckPilotSettings,
 )
 from edcraft_backend.dependencies import (
     get_ai_authoring_service,
@@ -90,6 +91,7 @@ async def env_for(
     max_queue: int = 10,
     max_quantity: int = 50,
     job_timeout_seconds: float = 1800.0,
+    check_pilot: CheckPilotSettings | None = None,
 ) -> AsyncGenerator[AuthoringHarness, None]:
     settings = AuthoringSettings(
         storage_dir=tmp_path / "authoring",
@@ -102,7 +104,7 @@ async def env_for(
         shutdown_timeout_seconds=1.0,
         job_timeout_seconds=job_timeout_seconds,
     )
-    service = AiAuthoringService(settings, executor=executor)
+    service = AiAuthoringService(settings, executor=executor, check_pilot=check_pilot)
     await service.startup()
     user = FakeUser(uuid4())
 
@@ -212,10 +214,27 @@ async def test_capabilities_are_safe_and_server_configured(checked_env: Authorin
     assert body["min_distractors"] == 1
     assert body["max_distractors"] == 10
     assert body["default_distractors"] == 3
+    assert body["check_pilot_timeout_seconds"] == 185.0
     assert body["judge"]["provider"]
     assert body["judge"]["model"]
     assert "api_key" not in response.text
     assert "http" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_capabilities_publish_the_combined_pilot_bound(tmp_path: Path) -> None:
+    async with env_for(
+        tmp_path,
+        StaticExecutor(lambda command: make_checked_report(command)),
+        check_pilot=CheckPilotSettings(
+            admission_timeout_seconds=2.0,
+            request_timeout_seconds=7.0,
+        ),
+    ) as env:
+        response = await env.client.get("/ai-authoring/capabilities")
+
+    assert response.status_code == 200
+    assert response.json()["check_pilot_timeout_seconds"] == 9.0
 
 
 @pytest.mark.asyncio

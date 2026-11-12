@@ -498,7 +498,7 @@ JobServiceDep = Annotated[JobService, Depends(get_job_service)]
 @lru_cache
 def get_ai_authoring_service() -> AiAuthoringService:
     """Get the process-wide file-backed AI authoring service."""
-    return AiAuthoringService(settings.authoring)
+    return AiAuthoringService(settings.authoring, check_pilot=settings.check_pilot)
 
 
 AiAuthoringServiceDep = Annotated[

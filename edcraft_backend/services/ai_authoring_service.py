@@ -26,7 +26,11 @@ from edcraft_validator.domains.domain_registry import available_domains, create_
 from edcraft_validator.llm.judge_configuration import load_judge_settings
 from pydantic import ValidationError
 
-from edcraft_backend.config.settings import AuthoringProfileSettings, AuthoringSettings
+from edcraft_backend.config.settings import (
+    AuthoringProfileSettings,
+    AuthoringSettings,
+    CheckPilotSettings,
+)
 from edcraft_backend.schemas.ai_authoring import (
     ApprovalRequest,
     ApprovalResponse,
@@ -87,11 +91,13 @@ class AiAuthoringService:
         *,
         store: AuthoringStore | None = None,
         executor: JobExecutor | None = None,
+        check_pilot: CheckPilotSettings | None = None,
     ) -> None:
         self.settings = settings
         self.store = store or AuthoringStore(settings)
         self._executor: JobExecutor = executor or run_library_authoring_job
         self.lifecycle = AuthoringLifecycle(self.store, settings)
+        self._check_pilot = check_pilot or CheckPilotSettings()
 
     async def startup(self) -> None:
         """Prepare storage, reconcile interruptions and bind the lifecycle."""
@@ -138,6 +144,10 @@ class AiAuthoringService:
             min_distractors=MIN_DISTRACTORS,
             max_distractors=MAX_DISTRACTORS,
             default_distractors=DEFAULT_DISTRACTORS,
+            check_pilot_timeout_seconds=(
+                self._check_pilot.admission_timeout_seconds
+                + self._check_pilot.request_timeout_seconds
+            ),
         )
 
     async def submit(
