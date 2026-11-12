@@ -84,6 +84,12 @@ TEMPLATE = {
     },
     "provenance": {"author": "check-author", "prompt_version": "template-author/1"},
     "check_qualification": QUALIFICATION,
+    "selection": {
+        "contract_id": "polynomial.differentiate/1",
+        "reason": "The differentiation contract covers the requested task.",
+        "source": "authored",
+        "check_ref": CHECK_REF,
+    },
 }
 BATCH = {
     "template_id": TEMPLATE_ID,
@@ -598,6 +604,7 @@ def test_openapi_documents_the_ai_owned_pilot_response_models() -> None:
     assert {
         "check_qualification",
         "reused_check",
+        "selection",
         "template_sha256",
     } <= set(schemas["PilotTemplateRecord"]["properties"])
     assert {"questions", "requested_quantity", "shortfall"} <= set(
