@@ -166,6 +166,7 @@ async def test_equation_and_inequality_compile_approve_generate_and_reuse(
             CHECK_RECIPE,
             POLYNOMIAL_FAMILY,
         ]
+        assert scripts.providers[0].closed is True
 
         created = await _author(harness.client, "Solve a bounded quadratic inequality")
         assert created.status_code == 200, created.text
@@ -274,9 +275,11 @@ async def test_unknown_contract_plan_fails_closed_without_authoring(
         assert created.status_code == 200, created.text
         record = created.json()
         _assert_fail_closed(record)
+        assert record["selection"] is None
         assert any("contract" in finding.lower() for finding in record["findings"])
         assert (await harness.client.get(f"{BASE}/checks")).json() == []
-        assert scripts.providers[0].calls == [CHECK_PLAN]
+        # A supported but invalid plan receives the bounded repair budget.
+        assert scripts.providers[0].calls == [CHECK_PLAN] * 3
 
         rejected = await harness.client.post(
             f"{BASE}/templates/{record['template_id']}/approval",
@@ -305,6 +308,7 @@ async def test_missing_capability_reports_development_needed(tmp_path: Path) -> 
         assert created.status_code == 200, created.text
         record = created.json()
         _assert_fail_closed(record)
+        assert record["selection"] is None
         assert any(
             "LU decomposition" in finding or "development" in finding.lower()
             for finding in record["findings"]
@@ -333,12 +337,13 @@ async def test_incompatible_contract_goal_fails_closed(tmp_path: Path) -> None:
         assert created.status_code == 200, created.text
         record = created.json()
         _assert_fail_closed(record)
+        assert record["selection"] is None
         assert any(
             "relation" in finding.lower() or "contract" in finding.lower()
             for finding in record["findings"]
         )
         assert (await harness.client.get(f"{BASE}/checks")).json() == []
-        assert scripts.providers[0].calls == [CHECK_PLAN]
+        assert scripts.providers[0].calls == [CHECK_PLAN] * 3
 
 
 @pytest.mark.asyncio
@@ -361,12 +366,13 @@ async def test_plan_cannot_disable_complete_solution_policy(tmp_path: Path) -> N
         assert created.status_code == 200, created.text
         record = created.json()
         _assert_fail_closed(record)
+        assert record["selection"] is None
         assert any(
             "complete" in finding.lower() or "solution" in finding.lower()
             for finding in record["findings"]
         )
         assert (await harness.client.get(f"{BASE}/checks")).json() == []
-        assert scripts.providers[0].calls == [CHECK_PLAN]
+        assert scripts.providers[0].calls == [CHECK_PLAN] * 3
 
 
 @pytest.mark.asyncio
@@ -392,6 +398,8 @@ async def test_template_scope_mismatch_is_needs_review_not_substitution(
         assert record["status"] == "needs_review", record
         assert record["approval"] == "unreviewed"
         assert record["findings"]
+        assert record["selection"]["contract_id"] == EQUATION
+        assert record["selection"]["check_ref"] == record["check"]["check_ref"]
         assert any(
             "relation" in finding.lower() or "template" in finding.lower()
             for finding in record["findings"]
@@ -429,6 +437,7 @@ async def test_unsupported_recipe_operation_has_no_execution_or_counterexample(
         record = created.json()
         _assert_fail_closed(record)
         assert record["check"] is None
+        assert record["selection"] is None
         qualification = record.get("check_qualification")
         assert qualification is not None
         assert qualification["status"] == "error"
@@ -463,6 +472,7 @@ async def test_foreign_saved_check_reference_fails_closed(tmp_path: Path) -> Non
         assert created.status_code == 200, created.text
         record_b = created.json()
         _assert_fail_closed(record_b)
+        assert record_b["selection"] is None
         assert any(
             "check" in finding.lower()
             or "not found" in finding.lower()
@@ -475,3 +485,45 @@ async def test_foreign_saved_check_reference_fails_closed(tmp_path: Path) -> Non
         app.dependency_overrides[get_current_user] = lambda: _User(UUID(owner_a))
         checks_a = await harness.client.get(f"{BASE}/checks")
         assert [item["check_ref"] for item in checks_a.json()] == [foreign_ref]
+
+
+@pytest.mark.asyncio
+async def test_structured_plan_not_prompt_topic_dispatch(tmp_path: Path) -> None:
+    # The prompt says "differentiate", but the planner selects an equation
+    # contract. Application-validated structured goal must win; the backend
+    # never dispatches on request topic text.
+    scripts = ProviderScripts([solve_script(EQUATION, relation="eq")])
+    async with _harness(tmp_path, scripts) as harness:
+        created = await _author(harness.client, "Differentiate x^2")
+        assert created.status_code == 200, created.text
+        record = created.json()
+        assert record["status"] == "ready", record["findings"]
+        assert record["selection"]["contract_id"] == EQUATION
+        assert record["check"]["scope"]["contract_id"] == EQUATION
+        assert record["check"]["scope"]["operation"] == "solve"
+        assert record["template"]["contract_id"] == EQUATION
+
+
+@pytest.mark.asyncio
+async def test_stale_saved_check_hash_fails_closed(tmp_path: Path) -> None:
+    scripts = ProviderScripts([solve_script(EQUATION, relation="eq")])
+    async with _harness(tmp_path, scripts) as harness:
+        created = await _author(harness.client, "Solve a quadratic equation")
+        assert created.status_code == 200, created.text
+        record_a = created.json()
+        stale_ref = {
+            **record_a["check"]["check_ref"],
+            "sha256": "0" * 64,
+        }
+        scripts.scripts.append(solve_script(EQUATION, relation="eq", saved_check_ref=stale_ref))
+        created = await _author(harness.client, "Reuse the saved check")
+        assert created.status_code == 200, created.text
+        record = created.json()
+        _assert_fail_closed(record)
+        assert record["selection"] is None
+        assert any(
+            "stale" in finding.lower() or "hash" in finding.lower()
+            for finding in record["findings"]
+        )
+        # A stale reference never stores a second check.
+        assert len((await harness.client.get(f"{BASE}/checks")).json()) == 1

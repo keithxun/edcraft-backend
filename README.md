@@ -203,9 +203,9 @@ key. `EDCRAFT_JUDGE_REASONING_EFFORT` and `EDCRAFT_RELEVANCE_THRESHOLD` still
 configure those checks; `EDCRAFT_JUDGE_PROVIDER`/`MODEL` only affect direct
 CLI or MCP use of `edcraft-validator`.
 
-### Check authoring pilot
+### Reusable maths check catalogue
 
-The private polynomial check pilot is exposed under
+The private reusable-check catalogue is exposed under
 `/ai-authoring/check-pilot`:
 
 - `POST /templates`, `GET /templates`, `GET /templates/{template_id}`
@@ -217,9 +217,29 @@ All routes require the existing user authentication and only expose the
 signed-in owner's records. `POST /templates` accepts exactly one existing
 author source: a configured `AUTHORING_MODEL_PROFILES` entry
 (`model_profile`) or an owner-scoped BYOK `connection_id` with `model`. The
-same resolved provider serves the AI application's check-author and
-template-author calls and is closed after each request. Responses are the
-AI-owned `edcraft-validator` models, documented in OpenAPI.
+same resolved provider serves the AI application's structured planning,
+check-author and template-author calls and is closed after each request.
+Responses are the AI-owned `edcraft-validator` models, documented in OpenAPI.
+
+The planning role selects a developer-owned contract and a structured
+mathematical goal; the application validates it before doing anything else.
+Supported contracts are bounded univariate real polynomial differentiation
+through degree 5 and complete real solution sets for bounded linear/quadratic
+equations and inequalities through degree 2 (including repeated or non-real
+roots, interval unions and endpoint flags). The planner may reference one of
+the owner's qualified saved checks. Unknown, foreign, stale or incompatible
+references fail closed with findings; the application never substitutes a
+different task and models cannot disable the mandatory complete-answer policy.
+Unsupported requests (for example LU decomposition or general integration)
+report development-needed and never install generated code.
+
+Records expose additive `selection` metadata on `PilotTemplateRecord`
+(`contract_id`, `reason`, `source: saved|authored`, `check_ref`) so clients can
+show the selected contract and pinned check. Failed drafts may omit it.
+Generation is deterministic from a seed, makes no model calls, and checks each
+emitted key and distractor with both the pinned recipe and an independent
+application guard. Legacy version-1 differentiation records remain readable,
+hash-stable and generate identically after the upgrade.
 
 Records live beside legacy authoring state at
 `$AUTHORING_STORAGE_DIR/check-pilot` and are not database rows. Keep the same
@@ -237,10 +257,9 @@ failures 503. The authenticated `GET /ai-authoring/capabilities` response
 publishes `check_pilot_timeout_seconds`, the sum of the configured admission
 and request bounds, so clients can choose a timeout with a positive transport
 margin instead of hardcoding the execution default. This route requires the
-pinned `edcraft-validator` revision
-`ef8bc0898a3b8d28f1ca32d6adcb2596985c2404`. Integration order is the AI commit
-first, then this pinned backend, then the frontend; no publication or deploy is
-part of this change.
+`edcraft-validator` revision pinned in `pyproject.toml` and `uv.lock`.
+Integration order is the AI commit first, then this pinned backend, then the
+frontend; no publication or deploy is part of this change.
 
 ## 🖥️ WSL2 Nomad Setup
 
