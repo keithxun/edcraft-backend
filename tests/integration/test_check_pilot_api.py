@@ -13,6 +13,11 @@ from uuid import UUID, uuid4
 
 import pytest
 import pytest_asyncio
+from edcraft_validator.application.check_pilot import (
+    PilotConflict,
+    PilotInputError,
+    PilotNotFound,
+)
 from httpx import ASGITransport, AsyncClient
 
 from edcraft_backend.config.settings import (
@@ -461,6 +466,27 @@ async def test_generation_quantity_is_bounded_by_the_authoring_setting(
             json={"seed": 0, "quantity": 2},
         )
         assert allowed.status_code == 200
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "status"),
+    [
+        (PilotNotFound("Private pilot record not found."), 404),
+        (PilotConflict("The check digest does not match."), 409),
+        (PilotInputError("Only bounded polynomials are supported."), 422),
+    ],
+)
+async def test_ai_pilot_failures_map_to_contract_statuses(
+    env: Harness, error: Exception, status: int
+) -> None:
+    env.app_model.error = error
+
+    response = await env.client.get("/ai-authoring/check-pilot/checks/check-1")
+
+    assert response.status_code == status
+    assert response.json()["detail"] == str(error)
+    assert response.json()["error_type"].startswith("CheckPilot")
 
 
 @pytest.mark.asyncio

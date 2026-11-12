@@ -10,6 +10,12 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
+from edcraft_validator.application.check_pilot import (
+    PilotConflict,
+    PilotError,
+    PilotInputError,
+    PilotNotFound,
+)
 
 from edcraft_backend.config.settings import (
     AuthoringProfileSettings,
@@ -23,7 +29,9 @@ from edcraft_backend.schemas.check_pilot import (
 )
 from edcraft_backend.services.check_pilot_service import (
     CheckPilotAdmissionFull,
+    CheckPilotConflict,
     CheckPilotInputError,
+    CheckPilotNotFound,
     CheckPilotService,
     CheckPilotTimeout,
     CheckPilotUnavailable,
@@ -297,6 +305,40 @@ async def test_timeout_holds_admission_until_the_worker_returns(tmp_path: Path) 
     else:
         raise AssertionError("the timed-out worker never released its slot")
     assert listed == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (PilotNotFound("Private pilot record not found."), CheckPilotNotFound),
+        (PilotConflict("The template digest is stale."), CheckPilotConflict),
+        (PilotInputError("Only degree five is supported."), CheckPilotInputError),
+    ],
+)
+async def test_ai_exceptions_map_to_safe_http_failures(
+    tmp_path: Path, error: Exception, expected: type[Exception]
+) -> None:
+    app = FakeApplication()
+    app.error = error
+    service, _ = make_service(tmp_path, app)
+
+    with pytest.raises(expected) as raised:
+        await service.get_template(uuid4(), "template-1")
+
+    assert str(error) in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_generic_ai_failure_is_unavailable_and_sanitized(tmp_path: Path) -> None:
+    app = FakeApplication()
+    app.error = PilotError("worker storage leaked /private/secret/path")
+    service, _ = make_service(tmp_path, app)
+
+    with pytest.raises(CheckPilotUnavailable) as raised:
+        await service.get_check(uuid4(), "check-1")
+
+    assert raised.value.status_code == 503
 
 
 @pytest.mark.asyncio

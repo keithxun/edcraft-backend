@@ -12,9 +12,15 @@ import asyncio
 import logging
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Protocol, TypeVar
+from typing import Any, Protocol, TypeVar, cast
 from uuid import UUID
 
+from edcraft_validator.application.check_pilot import (
+    PilotConflict,
+    PilotError,
+    PilotInputError,
+    PilotNotFound,
+)
 from edcraft_validator.llm.llm_contracts import ModelProvider
 from edcraft_validator.llm.usage import close_provider
 
@@ -129,6 +135,14 @@ def _consume_result(task: asyncio.Task[Any]) -> None:
     """Retrieve a worker outcome, including a late one after a request timeout."""
     if not task.cancelled():
         task.exception()
+
+
+def _safe_message(error: Exception, limit: int = 500) -> str:
+    """Forward only the AI-owned safe message, capped for the HTTP surface."""
+    message = str(error).strip()
+    if not message:
+        return "The check pilot request could not be completed."
+    return message[:limit]
 
 
 class CheckPilotService:
@@ -270,7 +284,7 @@ class CheckPilotService:
         # usable until the orchestrator updates the dependency revision.
         from edcraft_validator.application.check_pilot import CheckPilotApplication
 
-        return CheckPilotApplication(self.root)
+        return cast(PilotApplication, CheckPilotApplication(self.root))
 
     async def _execute(
         self,
@@ -283,6 +297,15 @@ class CheckPilotService:
             return await self._run_blocking(operation, label=label)
         except CheckPilotError:
             raise
+        except PilotNotFound as exc:
+            raise CheckPilotNotFound(_safe_message(exc)) from exc
+        except PilotConflict as exc:
+            raise CheckPilotConflict(_safe_message(exc)) from exc
+        except PilotInputError as exc:
+            raise CheckPilotInputError(_safe_message(exc)) from exc
+        except PilotError as exc:
+            logger.exception("Check pilot error", extra={"operation": label})
+            raise CheckPilotUnavailable(_safe_message(exc)) from exc
         except Exception as exc:
             logger.exception("Check pilot call failed", extra={"operation": label})
             raise CheckPilotUnavailable() from exc
