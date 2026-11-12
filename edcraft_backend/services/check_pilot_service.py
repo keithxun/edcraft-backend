@@ -16,10 +16,13 @@ from typing import Any, Protocol, TypeVar, cast
 from uuid import UUID
 
 from edcraft_validator.application.check_pilot import (
+    CheckRecord,
+    PilotBatch,
     PilotConflict,
     PilotError,
     PilotInputError,
     PilotNotFound,
+    PilotTemplateRecord,
 )
 from edcraft_validator.llm.llm_contracts import ModelProvider
 from edcraft_validator.llm.usage import close_provider
@@ -113,15 +116,15 @@ class PilotApplication(Protocol):
         prompt: str,
         provider: ModelProvider,
         num_distractors: int = 3,
-    ) -> Any: ...
+    ) -> PilotTemplateRecord: ...
 
-    def list_checks(self, owner_id: str) -> list[Any]: ...
+    def list_checks(self, owner_id: str) -> list[CheckRecord]: ...
 
-    def get_check(self, owner_id: str, check_id: str) -> Any: ...
+    def get_check(self, owner_id: str, check_id: str) -> CheckRecord: ...
 
-    def list_templates(self, owner_id: str) -> list[Any]: ...
+    def list_templates(self, owner_id: str) -> list[PilotTemplateRecord]: ...
 
-    def get_template(self, owner_id: str, template_id: str) -> Any: ...
+    def get_template(self, owner_id: str, template_id: str) -> PilotTemplateRecord: ...
 
     def decide(
         self,
@@ -131,11 +134,11 @@ class PilotApplication(Protocol):
         template_sha256: str,
         check_sha256: str,
         decision: str,
-    ) -> Any: ...
+    ) -> PilotTemplateRecord: ...
 
     def generate(
         self, owner_id: str, template_id: str, *, seed: int, quantity: int
-    ) -> Any: ...
+    ) -> PilotBatch: ...
 
 
 def _consume_result(task: asyncio.Task[Any]) -> None:
@@ -183,7 +186,7 @@ class CheckPilotService:
         request: PilotTemplateRequest,
         *,
         connection: ResolvedConnection | None,
-    ) -> Any:
+    ) -> PilotTemplateRecord:
         """Run one author/check-author/provider call for the owner."""
         role = self._role(request, connection=connection)
         owner = str(owner_id)
@@ -204,28 +207,28 @@ class CheckPilotService:
 
         return await self._execute(operation, label="author_template")
 
-    async def list_checks(self, owner_id: UUID) -> list[Any]:
+    async def list_checks(self, owner_id: UUID) -> list[CheckRecord]:
         owner = str(owner_id)
         return await self._execute(
             lambda: self._application_factory().list_checks(owner),
             label="list_checks",
         )
 
-    async def get_check(self, owner_id: UUID, check_id: str) -> Any:
+    async def get_check(self, owner_id: UUID, check_id: str) -> CheckRecord:
         owner = str(owner_id)
         return await self._execute(
             lambda: self._application_factory().get_check(owner, check_id),
             label="get_check",
         )
 
-    async def list_templates(self, owner_id: UUID) -> list[Any]:
+    async def list_templates(self, owner_id: UUID) -> list[PilotTemplateRecord]:
         owner = str(owner_id)
         return await self._execute(
             lambda: self._application_factory().list_templates(owner),
             label="list_templates",
         )
 
-    async def get_template(self, owner_id: UUID, template_id: str) -> Any:
+    async def get_template(self, owner_id: UUID, template_id: str) -> PilotTemplateRecord:
         owner = str(owner_id)
         return await self._execute(
             lambda: self._application_factory().get_template(owner, template_id),
@@ -237,7 +240,7 @@ class CheckPilotService:
         owner_id: UUID,
         template_id: str,
         request: PilotApprovalRequest,
-    ) -> Any:
+    ) -> PilotTemplateRecord:
         owner = str(owner_id)
         return await self._execute(
             lambda: self._application_factory().decide(
@@ -255,7 +258,7 @@ class CheckPilotService:
         owner_id: UUID,
         template_id: str,
         request: PilotGenerateRequest,
-    ) -> Any:
+    ) -> PilotBatch:
         limit = min(self._authoring.max_quantity, 50)
         if request.quantity > limit:
             raise CheckPilotInputError(

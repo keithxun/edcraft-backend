@@ -1,7 +1,12 @@
 """Authenticated, owner-scoped endpoints for the reusable check pilot."""
 
-from typing import Any, cast
+from typing import Any
 
+from edcraft_validator.application.check_pilot import (
+    CheckRecord,
+    PilotBatch,
+    PilotTemplateRecord,
+)
 from fastapi import APIRouter
 
 from edcraft_backend.dependencies import (
@@ -37,88 +42,77 @@ router = APIRouter(
 )
 
 
-def _dump(value: Any) -> dict[str, Any]:
-    """Return the AI-owned record exactly as its JSON contract defines it."""
-    dump = getattr(value, "model_dump", None)
-    if callable(dump):
-        return cast(dict[str, Any], dump(mode="json"))
-    return cast(dict[str, Any], value)
-
-
-@router.post("/templates", response_model=None)
+@router.post("/templates", response_model=PilotTemplateRecord)
 async def author_template(
     payload: PilotTemplateRequest,
     user: CurrentUserDep,
     service: CheckPilotServiceDep,
     connections: ProviderConnectionServiceDep,
-) -> dict[str, Any]:
+) -> PilotTemplateRecord:
     """Author one qualified private template with the resolved author model."""
     connection: ResolvedConnection | None = None
     if payload.connection_id is not None:
         connection = await connections.resolve(
             user.id, payload.connection_id, payload.model
         )
-    record = await service.author_template(user.id, payload, connection=connection)
-    return _dump(record)
+    return await service.author_template(user.id, payload, connection=connection)
 
 
-@router.get("/templates", response_model=None)
+@router.get("/templates", response_model=list[PilotTemplateRecord])
 async def list_templates(
     user: CurrentUserDep,
     service: CheckPilotServiceDep,
-) -> list[dict[str, Any]]:
+) -> list[PilotTemplateRecord]:
     """List only the signed-in owner's private pilot templates."""
-    return [_dump(record) for record in await service.list_templates(user.id)]
+    return await service.list_templates(user.id)
 
 
-@router.get("/templates/{template_id}", response_model=None)
+@router.get("/templates/{template_id}", response_model=PilotTemplateRecord)
 async def get_template(
     template_id: str,
     user: CurrentUserDep,
     service: CheckPilotServiceDep,
-) -> dict[str, Any]:
+) -> PilotTemplateRecord:
     """Return one owned template with its check evidence and approval."""
-    return _dump(await service.get_template(user.id, template_id))
+    return await service.get_template(user.id, template_id)
 
 
-@router.get("/checks", response_model=None)
+@router.get("/checks", response_model=list[CheckRecord])
 async def list_checks(
     user: CurrentUserDep,
     service: CheckPilotServiceDep,
-) -> list[dict[str, Any]]:
+) -> list[CheckRecord]:
     """List only the signed-in owner's qualified private checks."""
-    return [_dump(record) for record in await service.list_checks(user.id)]
+    return await service.list_checks(user.id)
 
 
-@router.get("/checks/{check_id}", response_model=None)
+@router.get("/checks/{check_id}", response_model=CheckRecord)
 async def get_check(
     check_id: str,
     user: CurrentUserDep,
     service: CheckPilotServiceDep,
-) -> dict[str, Any]:
+) -> CheckRecord:
     """Return one owned immutable check with its qualification evidence."""
-    return _dump(await service.get_check(user.id, check_id))
+    return await service.get_check(user.id, check_id)
 
 
-@router.post("/templates/{template_id}/approval", response_model=None)
+@router.post("/templates/{template_id}/approval", response_model=PilotTemplateRecord)
 async def decide_template(
     template_id: str,
     payload: PilotApprovalRequest,
     user: CurrentUserDep,
     service: CheckPilotServiceDep,
-) -> dict[str, Any]:
+) -> PilotTemplateRecord:
     """Approve or reject the exact template and check digests shown."""
-    record = await service.decide(user.id, template_id, payload)
-    return _dump(record)
+    return await service.decide(user.id, template_id, payload)
 
 
-@router.post("/templates/{template_id}/generate", response_model=None)
+@router.post("/templates/{template_id}/generate", response_model=PilotBatch)
 async def generate_questions(
     template_id: str,
     payload: PilotGenerateRequest,
     user: CurrentUserDep,
     service: CheckPilotServiceDep,
-) -> dict[str, Any]:
+) -> PilotBatch:
     """Generate a deterministic seeded batch from an approved template."""
-    batch = await service.generate(user.id, template_id, payload)
-    return _dump(batch)
+    return await service.generate(user.id, template_id, payload)

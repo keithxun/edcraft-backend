@@ -35,7 +35,9 @@ from edcraft_backend.services.check_pilot_service import CheckPilotService
 from edcraft_backend.services.provider_endpoint import ResolvedConnection
 
 DIGEST = "c" * 64
-CHECK_REF = {"check_id": "check-polynomial-diff", "version": "1.0.0", "sha256": DIGEST}
+CHECK_ID = "chk_" + "a" * 24
+TEMPLATE_ID = "tpl_" + "b" * 24
+CHECK_REF = {"check_id": CHECK_ID, "version": "1.0.0", "sha256": DIGEST}
 CHECK = {
     "check_ref": CHECK_REF,
     "title": "Polynomial differentiation",
@@ -59,7 +61,7 @@ CHECK = {
     "created_at": "2026-11-12T10:00:00Z",
 }
 TEMPLATE = {
-    "template_id": "template-polynomial-diff",
+    "template_id": TEMPLATE_ID,
     "template_sha256": DIGEST,
     "prompt": "Differentiate a polynomial",
     "status": "ready",
@@ -70,9 +72,17 @@ TEMPLATE = {
     "qualification": CHECK["qualification"],
     "findings": [],
     "created_at": "2026-11-12T10:01:00Z",
+    "scope": {
+        "subject": "univariate-real-polynomial",
+        "operation": "differentiate",
+        "variable": "x",
+        "max_degree": 5,
+    },
+    "provenance": {"author": "check-author", "prompt_version": "template-author/1"},
+    "check_qualification": CHECK["qualification"],
 }
 BATCH = {
-    "template_id": "template-polynomial-diff",
+    "template_id": TEMPLATE_ID,
     "seed": 11,
     "questions": [
         {
@@ -432,7 +442,7 @@ async def test_list_get_approval_and_generation_use_the_same_owner(
     assert templates.json() == [TEMPLATE]
 
     template = await env.client.get(
-        "/ai-authoring/check-pilot/templates/template-polynomial-diff"
+        f"/ai-authoring/check-pilot/templates/{TEMPLATE_ID}"
     )
     assert template.status_code == 200
     assert template.json() == TEMPLATE
@@ -442,13 +452,13 @@ async def test_list_get_approval_and_generation_use_the_same_owner(
     assert checks.json() == [CHECK]
 
     check = await env.client.get(
-        "/ai-authoring/check-pilot/checks/check-polynomial-diff"
+        f"/ai-authoring/check-pilot/checks/{CHECK_ID}"
     )
     assert check.status_code == 200
     assert check.json() == CHECK
 
     approval = await env.client.post(
-        "/ai-authoring/check-pilot/templates/template-polynomial-diff/approval",
+        f"/ai-authoring/check-pilot/templates/{TEMPLATE_ID}/approval",
         json={
             "template_sha256": DIGEST,
             "check_sha256": DIGEST,
@@ -459,7 +469,7 @@ async def test_list_get_approval_and_generation_use_the_same_owner(
     assert approval.json()["approval"] == "approved"
 
     generated = await env.client.post(
-        "/ai-authoring/check-pilot/templates/template-polynomial-diff/generate",
+        f"/ai-authoring/check-pilot/templates/{TEMPLATE_ID}/generate",
         json={"seed": 11, "quantity": 1},
     )
     assert generated.status_code == 200, generated.text
@@ -467,7 +477,7 @@ async def test_list_get_approval_and_generation_use_the_same_owner(
 
     owner = str(env.user.id)
     assert all(call[1][0] == owner for call in env.app_model.calls)
-    assert env.app_model.calls[-1][1] == (owner, "template-polynomial-diff")
+    assert env.app_model.calls[-1][1] == (owner, TEMPLATE_ID)
     assert env.app_model.calls[-1][2] == {"seed": 11, "quantity": 1}
 
 
@@ -477,14 +487,14 @@ async def test_generation_quantity_is_bounded_by_the_authoring_setting(
 ) -> None:
     async with env_for(tmp_path, max_quantity=2) as env:
         rejected = await env.client.post(
-            "/ai-authoring/check-pilot/templates/template-polynomial-diff/generate",
+            f"/ai-authoring/check-pilot/templates/{TEMPLATE_ID}/generate",
             json={"seed": 0, "quantity": 3},
         )
         assert rejected.status_code == 422
         assert env.app_model.calls == []
 
         allowed = await env.client.post(
-            "/ai-authoring/check-pilot/templates/template-polynomial-diff/generate",
+            f"/ai-authoring/check-pilot/templates/{TEMPLATE_ID}/generate",
             json={"seed": 0, "quantity": 2},
         )
         assert allowed.status_code == 200
@@ -558,3 +568,56 @@ async def test_timeout_and_admission_are_bounded_and_visible(tmp_path: Path) -> 
             assert listed.status_code == 429
             await asyncio.sleep(0.01)
         assert listed.json() == [TEMPLATE]
+
+
+def test_openapi_documents_the_ai_owned_pilot_response_models() -> None:
+    paths = app.openapi()["paths"]
+    base = "/ai-authoring/check-pilot"
+
+    def response_schema(path: str, method: str) -> dict[str, Any]:
+        return paths[path][method]["responses"]["200"]["content"]["application/json"][
+            "schema"
+        ]
+
+    template_ref = {"$ref": "#/components/schemas/PilotTemplateRecord"}
+    check_ref = {"$ref": "#/components/schemas/CheckRecord"}
+    batch_ref = {"$ref": "#/components/schemas/PilotBatch"}
+
+    def assert_list(schema: dict[str, Any], item_ref: dict[str, str]) -> None:
+        assert schema["type"] == "array"
+        assert schema["items"] == item_ref
+
+    assert response_schema(f"{base}/templates", "post") == template_ref
+    assert_list(response_schema(f"{base}/templates", "get"), template_ref)
+    assert response_schema(f"{base}/templates/{{template_id}}", "get") == template_ref
+    assert_list(response_schema(f"{base}/checks", "get"), check_ref)
+    assert response_schema(f"{base}/checks/{{check_id}}", "get") == check_ref
+    assert (
+        response_schema(f"{base}/templates/{{template_id}}/approval", "post")
+        == template_ref
+    )
+    assert (
+        response_schema(f"{base}/templates/{{template_id}}/generate", "post")
+        == batch_ref
+    )
+
+    schemas = app.openapi()["components"]["schemas"]
+    assert {
+        "check_ref",
+        "title",
+        "description",
+        "scope",
+        "definition",
+        "qualification",
+        "provenance",
+        "created_at",
+    } <= set(schemas["CheckRecord"]["properties"])
+    assert {
+        "check_qualification",
+        "reused_check",
+        "template_sha256",
+    } <= set(schemas["PilotTemplateRecord"]["properties"])
+    assert {"questions", "requested_quantity", "shortfall"} <= set(
+        schemas["PilotBatch"]["properties"]
+    )
+

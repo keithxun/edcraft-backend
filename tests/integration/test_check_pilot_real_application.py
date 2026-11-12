@@ -1,9 +1,9 @@
-"""End-to-end check pilot against the real AI application, when published.
+"""End-to-end check pilot against the real pinned AI application.
 
-These tests are skipped while the pinned validator wheel predates
-``CheckPilotApplication``. They exercise the backend's default factory,
-provider lifecycle and owner scoping with the AI-owned storage and records,
-using a scripted structured provider so no model is called.
+These tests exercise the backend's default factory, provider lifecycle and
+owner scoping with the AI-owned storage and records, using a scripted
+structured provider so no model is called. The pinned validator revision must
+publish ``CheckPilotApplication``; a missing pilot is a collection failure.
 """
 
 from __future__ import annotations
@@ -14,19 +14,8 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
-from httpx import ASGITransport, AsyncClient
-
-check_pilot = pytest.importorskip("edcraft_validator.application.check_pilot")
-if not hasattr(check_pilot, "CheckPilotApplication"):  # pragma: no cover - pre-pin
-    pytest.skip(
-        "the installed validator revision does not publish CheckPilotApplication",
-        allow_module_level=True,
-    )
-
-from edcraft_validator.application.check_pilot import (  # noqa: E402
-    CheckRecipeDefinition,
-)
-from edcraft_validator.application.check_pilot.models import (  # noqa: E402
+from edcraft_validator.application.check_pilot import CheckRecipeDefinition
+from edcraft_validator.application.check_pilot.models import (
     CheckAuthorProposal,
     CoefficientDomain,
     PolynomialFamily,
@@ -34,29 +23,30 @@ from edcraft_validator.application.check_pilot.models import (  # noqa: E402
     RecipeStep,
     TemplateAuthorProposal,
 )
+from httpx import ASGITransport, AsyncClient
 
-from edcraft_backend.config.settings import (  # noqa: E402
+from edcraft_backend.config.settings import (
     AuthoringProfileSettings,
     AuthoringSettings,
     CheckPilotSettings,
 )
-from edcraft_backend.dependencies import (  # noqa: E402
+from edcraft_backend.dependencies import (
     get_check_pilot_service,
     get_current_user,
     get_provider_connection_service,
 )
-from edcraft_backend.main import app  # noqa: E402
-from edcraft_backend.schemas.check_pilot import (  # noqa: E402
+from edcraft_backend.main import app
+from edcraft_backend.schemas.check_pilot import (
     PilotApprovalRequest,
     PilotGenerateRequest,
     PilotTemplateRequest,
 )
-from edcraft_backend.services.check_pilot_service import (  # noqa: E402
+from edcraft_backend.services.check_pilot_service import (
     CheckPilotConflict,
     CheckPilotNotFound,
     CheckPilotService,
 )
-from edcraft_backend.services.provider_endpoint import ResolvedConnection  # noqa: E402
+from edcraft_backend.services.provider_endpoint import ResolvedConnection
 
 PROFILE = AuthoringProfileSettings(
     id="pilot-profile",
