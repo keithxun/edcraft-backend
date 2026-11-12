@@ -17,6 +17,7 @@ from edcraft_validator.application.check_pilot import (
     PilotConflict,
     PilotInputError,
     PilotNotFound,
+    Qualification,
 )
 from httpx import ASGITransport, AsyncClient
 
@@ -38,25 +39,28 @@ DIGEST = "c" * 64
 CHECK_ID = "chk_" + "a" * 24
 TEMPLATE_ID = "tpl_" + "b" * 24
 CHECK_REF = {"check_id": CHECK_ID, "version": "1.0.0", "sha256": DIGEST}
+# Build from the AI-owned model so additive defaults (for example phase) follow
+# the installed schema instead of a hand-written copy.
+QUALIFICATION = Qualification(
+    status="passed",
+    checking_mode="property_based",
+    accepted_cases=20,
+    execution_calls=40,
+    seed=7,
+    max_examples=20,
+    max_execution_calls=40,
+    timeout_seconds=2.0,
+    counterexample=None,
+    findings=[],
+    versions={"validator": "pilot-1"},
+).model_dump(mode="json")
 CHECK = {
     "check_ref": CHECK_REF,
     "title": "Polynomial differentiation",
     "description": "Checks d/dx of bounded integer polynomials.",
     "scope": {"subject": "polynomial", "max_degree": 5},
     "definition": {"recipe": "differentiate"},
-    "qualification": {
-        "status": "passed",
-        "checking_mode": "property_based",
-        "accepted_cases": 20,
-        "execution_calls": 40,
-        "seed": 7,
-        "max_examples": 20,
-        "max_execution_calls": 40,
-        "timeout_seconds": 2.0,
-        "counterexample": None,
-        "findings": [],
-        "versions": {"validator": "pilot-1"},
-    },
+    "qualification": QUALIFICATION,
     "provenance": {"author": "check-author"},
     "created_at": "2026-11-12T10:00:00Z",
 }
@@ -69,7 +73,7 @@ TEMPLATE = {
     "reused_check": False,
     "check": CHECK,
     "template": {"coefficients": {"min": -4, "max": 4}},
-    "qualification": CHECK["qualification"],
+    "qualification": QUALIFICATION,
     "findings": [],
     "created_at": "2026-11-12T10:01:00Z",
     "scope": {
@@ -79,7 +83,7 @@ TEMPLATE = {
         "max_degree": 5,
     },
     "provenance": {"author": "check-author", "prompt_version": "template-author/1"},
-    "check_qualification": CHECK["qualification"],
+    "check_qualification": QUALIFICATION,
 }
 BATCH = {
     "template_id": TEMPLATE_ID,
@@ -193,9 +197,7 @@ class FakeApplication:
             },
         )
 
-    def generate(
-        self, owner_id: str, template_id: str, *, seed: int, quantity: int
-    ) -> Any:
+    def generate(self, owner_id: str, template_id: str, *, seed: int, quantity: int) -> Any:
         return self._result(
             "generate",
             (owner_id, template_id),
@@ -356,9 +358,7 @@ async def test_request_validation_rejects_incomplete_or_coerced_input(
         template_payload(num_distractors=True),
         template_payload(unknown=True),
     ):
-        response = await env.client.post(
-            "/ai-authoring/check-pilot/templates", json=payload
-        )
+        response = await env.client.post("/ai-authoring/check-pilot/templates", json=payload)
         assert response.status_code == 422, (payload, response.text)
 
     for payload in (
@@ -396,6 +396,7 @@ async def test_profile_authoring_returns_the_ai_record_and_closes_provider(
     )
     assert response.status_code == 200, response.text
     assert response.json() == TEMPLATE
+    assert response.json()["check_qualification"]["phase"] == "sampling"
 
     name, args, kwargs = env.app_model.calls[0]
     assert name == "author_template"
@@ -441,9 +442,7 @@ async def test_list_get_approval_and_generation_use_the_same_owner(
     assert templates.status_code == 200
     assert templates.json() == [TEMPLATE]
 
-    template = await env.client.get(
-        f"/ai-authoring/check-pilot/templates/{TEMPLATE_ID}"
-    )
+    template = await env.client.get(f"/ai-authoring/check-pilot/templates/{TEMPLATE_ID}")
     assert template.status_code == 200
     assert template.json() == TEMPLATE
 
@@ -451,9 +450,7 @@ async def test_list_get_approval_and_generation_use_the_same_owner(
     assert checks.status_code == 200
     assert checks.json() == [CHECK]
 
-    check = await env.client.get(
-        f"/ai-authoring/check-pilot/checks/{CHECK_ID}"
-    )
+    check = await env.client.get(f"/ai-authoring/check-pilot/checks/{CHECK_ID}")
     assert check.status_code == 200
     assert check.json() == CHECK
 
@@ -526,9 +523,7 @@ async def test_failures_are_safe_and_never_return_a_passing_record(
     env: Harness,
 ) -> None:
     env.app_model.error = RuntimeError("provider exploded with sk-secret")
-    response = await env.client.post(
-        "/ai-authoring/check-pilot/templates", json=template_payload()
-    )
+    response = await env.client.post("/ai-authoring/check-pilot/templates", json=template_payload())
     assert response.status_code == 503
     assert "sk-secret" not in response.text
     assert "provider exploded" not in response.text
@@ -545,15 +540,11 @@ async def test_timeout_and_admission_are_bounded_and_visible(tmp_path: Path) -> 
     ) as env:
         env.app_model.release = threading.Event()
         first = asyncio.create_task(
-            env.client.post(
-                "/ai-authoring/check-pilot/templates", json=template_payload()
-            )
+            env.client.post("/ai-authoring/check-pilot/templates", json=template_payload())
         )
         assert await asyncio.to_thread(env.app_model.entered.wait, 2)
 
-        busy = await env.client.post(
-            "/ai-authoring/check-pilot/templates", json=template_payload()
-        )
+        busy = await env.client.post("/ai-authoring/check-pilot/templates", json=template_payload())
         assert busy.status_code == 429
 
         timed_out = await first
@@ -575,9 +566,7 @@ def test_openapi_documents_the_ai_owned_pilot_response_models() -> None:
     base = "/ai-authoring/check-pilot"
 
     def response_schema(path: str, method: str) -> dict[str, Any]:
-        return paths[path][method]["responses"]["200"]["content"]["application/json"][
-            "schema"
-        ]
+        return paths[path][method]["responses"]["200"]["content"]["application/json"]["schema"]
 
     template_ref = {"$ref": "#/components/schemas/PilotTemplateRecord"}
     check_ref = {"$ref": "#/components/schemas/CheckRecord"}
@@ -592,14 +581,8 @@ def test_openapi_documents_the_ai_owned_pilot_response_models() -> None:
     assert response_schema(f"{base}/templates/{{template_id}}", "get") == template_ref
     assert_list(response_schema(f"{base}/checks", "get"), check_ref)
     assert response_schema(f"{base}/checks/{{check_id}}", "get") == check_ref
-    assert (
-        response_schema(f"{base}/templates/{{template_id}}/approval", "post")
-        == template_ref
-    )
-    assert (
-        response_schema(f"{base}/templates/{{template_id}}/generate", "post")
-        == batch_ref
-    )
+    assert response_schema(f"{base}/templates/{{template_id}}/approval", "post") == template_ref
+    assert response_schema(f"{base}/templates/{{template_id}}/generate", "post") == batch_ref
 
     schemas = app.openapi()["components"]["schemas"]
     assert {
@@ -620,4 +603,3 @@ def test_openapi_documents_the_ai_owned_pilot_response_models() -> None:
     assert {"questions", "requested_quantity", "shortfall"} <= set(
         schemas["PilotBatch"]["properties"]
     )
-
