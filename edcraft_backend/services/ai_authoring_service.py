@@ -78,7 +78,7 @@ ApprovalView = StoredReviewerApproval
 logger = logging.getLogger(__name__)
 
 # Must match [tool.uv.sources].edcraft-validator.rev in pyproject.toml.
-LIBRARY_REVISION = "78831260e7b6e5a4744ec834c057bbf4ea708f21"
+LIBRARY_REVISION = "cac5cb36379556056bf4732802fbed973e206e85"
 MAX_FINDING_TEXT = 2_000
 
 
