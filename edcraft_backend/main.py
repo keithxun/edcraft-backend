@@ -16,6 +16,7 @@ from edcraft_backend.routers import (
     assessment_templates,
     assessments,
     auth,
+    check_pilot,
     collaborators,
     folders,
     input_generator,
@@ -59,9 +60,7 @@ app = FastAPI(
 
 
 @app.exception_handler(EdCraftBaseException)
-async def edcraft_exception_handler(
-    request: Request, exc: EdCraftBaseException
-) -> JSONResponse:
+async def edcraft_exception_handler(request: Request, exc: EdCraftBaseException) -> JSONResponse:
     """Handle custom EdCraft exceptions."""
     return JSONResponse(
         status_code=exc.status_code,
@@ -88,6 +87,7 @@ app.include_router(input_generator.router)
 app.include_router(question_generation.router)
 app.include_router(jobs.router)
 app.include_router(ai_authoring.router)
+app.include_router(check_pilot.router)
 app.include_router(provider_connections.router)
 app.include_router(users.router)
 app.include_router(auth.router)
