@@ -203,6 +203,41 @@ key. `EDCRAFT_JUDGE_REASONING_EFFORT` and `EDCRAFT_RELEVANCE_THRESHOLD` still
 configure those checks; `EDCRAFT_JUDGE_PROVIDER`/`MODEL` only affect direct
 CLI or MCP use of `edcraft-validator`.
 
+### Check authoring pilot
+
+The private polynomial check pilot is exposed under
+`/ai-authoring/check-pilot`:
+
+- `POST /templates`, `GET /templates`, `GET /templates/{template_id}`
+- `GET /checks`, `GET /checks/{check_id}`
+- `POST /templates/{template_id}/approval`
+- `POST /templates/{template_id}/generate`
+
+All routes require the existing user authentication and only expose the
+signed-in owner's records. `POST /templates` accepts exactly one existing
+author source: a configured `AUTHORING_MODEL_PROFILES` entry
+(`model_profile`) or an owner-scoped BYOK `connection_id` with `model`. The
+same resolved provider serves the AI application's check-author and
+template-author calls and is closed after each request. Responses are the
+AI-owned `edcraft-validator` models, documented in OpenAPI.
+
+Records live beside legacy authoring state at
+`$AUTHORING_STORAGE_DIR/check-pilot` and are not database rows. Keep the same
+single-backend-process and durable-volume constraint as authoring. Bounds:
+
+```bash
+CHECK_PILOT_MAX_CONCURRENT_REQUESTS=2       # workers per process
+CHECK_PILOT_ADMISSION_TIMEOUT_SECONDS=5     # wait for a free worker
+CHECK_PILOT_REQUEST_TIMEOUT_SECONDS=180     # wall clock per request
+```
+
+Generation quantity is additionally capped at `min(AUTHORING_MAX_QUANTITY, 50)`.
+Admission exhaustion returns 429, timed-out workers 504, and provider/storage
+failures 503. This route requires the pinned `edcraft-validator` revision
+`724e02aec72a67e80b8f9ab7927b73679c93eef0`. Integration order is the AI commit
+first, then this pinned backend, then the frontend; no publication or deploy is
+part of this change.
+
 ## 🖥️ WSL2 Nomad Setup
 
 If you're using **WSL2**, if you are facing issues using nomad, follow the instructions in this section.
