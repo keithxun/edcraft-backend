@@ -238,7 +238,7 @@ publishes `check_pilot_timeout_seconds`, the sum of the configured admission
 and request bounds, so clients can choose a timeout with a positive transport
 margin instead of hardcoding the execution default. This route requires the
 pinned `edcraft-validator` revision
-`c7091de2f36b90106527ffef2ac7193c912294a7`. Integration order is the AI commit
+`ef8bc0898a3b8d28f1ca32d6adcb2596985c2404`. Integration order is the AI commit
 first, then this pinned backend, then the frontend; no publication or deploy is
 part of this change.
 
