@@ -128,7 +128,7 @@ class PilotApplication(Protocol):
         template_id: str,
         *,
         template_sha256: str,
-        check_sha256: str,
+        check_sha256: str | None,
         decision: str,
     ) -> PilotTemplateRecord: ...
 

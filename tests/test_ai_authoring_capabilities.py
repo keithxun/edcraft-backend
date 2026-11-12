@@ -34,9 +34,7 @@ async def test_capabilities_publish_admission_plus_request_timeout(
 async def test_capabilities_fall_back_to_default_pilot_bounds(
     tmp_path: Path,
 ) -> None:
-    service = AiAuthoringService(
-        AuthoringSettings(storage_dir=tmp_path / "authoring")
-    )
+    service = AiAuthoringService(AuthoringSettings(storage_dir=tmp_path / "authoring"))
 
     capabilities = await service.capabilities()
 
@@ -65,9 +63,7 @@ def test_capabilities_pilot_timeout_must_be_positive_and_finite() -> None:
 
 def test_capabilities_openapi_documents_the_combined_pilot_bound() -> None:
     schemas = app.openapi()["components"]["schemas"]
-    field = schemas["AuthoringCapabilitiesResponse"]["properties"][
-        "check_pilot_timeout_seconds"
-    ]
+    field = schemas["AuthoringCapabilitiesResponse"]["properties"]["check_pilot_timeout_seconds"]
 
     assert field["type"] == "number"
     assert field["exclusiveMinimum"] == 0
