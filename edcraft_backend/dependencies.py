@@ -173,14 +173,20 @@ def get_question_service(
 
 
 def get_question_template_service(
-    template_repo: QuestionTemplateRepository = Depends(get_question_template_repository),
-    target_element_repo: TargetElementRepository = Depends(get_target_element_repository),
+    template_repo: QuestionTemplateRepository = Depends(
+        get_question_template_repository
+    ),
+    target_element_repo: TargetElementRepository = Depends(
+        get_target_element_repository
+    ),
     collaborator_repo: ResourceCollaboratorRepository = Depends(
         get_resource_collaborator_repository
     ),
 ) -> QuestionTemplateService:
     """Get QuestionTemplateService instance."""
-    return QuestionTemplateService(template_repo, target_element_repo, collaborator_repo)
+    return QuestionTemplateService(
+        template_repo, target_element_repo, collaborator_repo
+    )
 
 
 def get_folder_service(
@@ -191,8 +197,12 @@ def get_folder_service(
         get_assessment_template_repository
     ),
     question_svc: QuestionService = Depends(get_question_service),
-    question_template_svc: QuestionTemplateService = Depends(get_question_template_service),
-    qt_bank_repo: QuestionTemplateBankRepository = Depends(get_question_template_bank_repository),
+    question_template_svc: QuestionTemplateService = Depends(
+        get_question_template_service
+    ),
+    qt_bank_repo: QuestionTemplateBankRepository = Depends(
+        get_question_template_bank_repository
+    ),
 ) -> FolderService:
     """Get FolderService instance."""
     return FolderService(
@@ -222,7 +232,9 @@ def get_collaboration_service(
     folder_svc: FolderService = Depends(get_folder_service),
     assessment_repo: AssessmentRepository = Depends(get_assessment_repository),
     question_bank_repo: QuestionBankRepository = Depends(get_question_bank_repository),
-    qt_bank_repo: QuestionTemplateBankRepository = Depends(get_question_template_bank_repository),
+    qt_bank_repo: QuestionTemplateBankRepository = Depends(
+        get_question_template_bank_repository
+    ),
     assessment_template_repo: AssessmentTemplateRepository = Depends(
         get_assessment_template_repository
     ),
@@ -272,10 +284,14 @@ def get_question_bank_service(
 
 
 def get_question_template_bank_service(
-    qt_bank_repo: QuestionTemplateBankRepository = Depends(get_question_template_bank_repository),
+    qt_bank_repo: QuestionTemplateBankRepository = Depends(
+        get_question_template_bank_repository
+    ),
     folder_svc: FolderService = Depends(get_folder_service),
     qt_repo: QuestionTemplateRepository = Depends(get_question_template_repository),
-    question_template_svc: QuestionTemplateService = Depends(get_question_template_service),
+    question_template_svc: QuestionTemplateService = Depends(
+        get_question_template_service
+    ),
     collaboration_svc: CollaborationService = Depends(get_collaboration_service),
 ) -> QuestionTemplateBankService:
     """Get QuestionTemplateBankService instance."""
@@ -285,9 +301,13 @@ def get_question_template_bank_service(
 
 
 def get_assessment_template_service(
-    template_repo: AssessmentTemplateRepository = Depends(get_assessment_template_repository),
+    template_repo: AssessmentTemplateRepository = Depends(
+        get_assessment_template_repository
+    ),
     folder_svc: FolderService = Depends(get_folder_service),
-    question_template_svc: QuestionTemplateService = Depends(get_question_template_service),
+    question_template_svc: QuestionTemplateService = Depends(
+        get_question_template_service
+    ),
     qt_repo: QuestionTemplateRepository = Depends(get_question_template_repository),
     collaboration_svc: CollaborationService = Depends(get_collaboration_service),
 ) -> AssessmentTemplateService:
@@ -304,12 +324,16 @@ def get_assessment_template_service(
 def get_auth_service(
     user_repo: UserRepository = Depends(get_user_repository),
     refresh_token_repo: RefreshTokenRepository = Depends(get_refresh_token_repository),
-    one_time_token_repo: OneTimeTokenRepository = Depends(get_one_time_token_repository),
+    one_time_token_repo: OneTimeTokenRepository = Depends(
+        get_one_time_token_repository
+    ),
     folder_svc: FolderService = Depends(get_folder_service),
     email_svc: EmailService = Depends(get_email_service),
 ) -> AuthService:
     """Get AuthService instance."""
-    return AuthService(user_repo, refresh_token_repo, one_time_token_repo, folder_svc, email_svc)
+    return AuthService(
+        user_repo, refresh_token_repo, one_time_token_repo, folder_svc, email_svc
+    )
 
 
 def get_oauth_service(
@@ -336,7 +360,9 @@ async def get_current_user(
     """Resolve the authenticated user from the access_token httpOnly cookie."""
 
     if not access_token:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated"
+        )
     try:
         payload = decode_token(access_token)
         if payload.get("type") != "access":
@@ -345,7 +371,9 @@ async def get_current_user(
             )
         user = await user_repo.get_by_id(UUID(payload["sub"]))
         if not user or not user.is_active:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User inactive")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="User inactive"
+            )
         return user
     except HTTPException:
         raise
@@ -390,7 +418,9 @@ QuestionTemplateServiceDep = Annotated[
     Depends(get_question_template_service),
 ]
 AssessmentServiceDep = Annotated[AssessmentService, Depends(get_assessment_service)]
-QuestionBankServiceDep = Annotated[QuestionBankService, Depends(get_question_bank_service)]
+QuestionBankServiceDep = Annotated[
+    QuestionBankService, Depends(get_question_bank_service)
+]
 QuestionTemplateBankServiceDep = Annotated[
     QuestionTemplateBankService,
     Depends(get_question_template_bank_service),
@@ -399,7 +429,9 @@ AssessmentTemplateServiceDep = Annotated[
     AssessmentTemplateService,
     Depends(get_assessment_template_service),
 ]
-CollaborationServiceDep = Annotated[CollaborationService, Depends(get_collaboration_service)]
+CollaborationServiceDep = Annotated[
+    CollaborationService, Depends(get_collaboration_service)
+]
 AuthServiceDep = Annotated[AuthService, Depends(get_auth_service)]
 OAuthServiceDep = Annotated[OAuthService, Depends(get_oauth_service)]
 CurrentUserDep = Annotated[User, Depends(get_current_user)]
@@ -413,8 +445,12 @@ QuestionTemplateRepositoryDep = Annotated[
     QuestionTemplateRepository,
     Depends(get_question_template_repository),
 ]
-AssessmentRepositoryDep = Annotated[AssessmentRepository, Depends(get_assessment_repository)]
-QuestionBankRepositoryDep = Annotated[QuestionBankRepository, Depends(get_question_bank_repository)]
+AssessmentRepositoryDep = Annotated[
+    AssessmentRepository, Depends(get_assessment_repository)
+]
+QuestionBankRepositoryDep = Annotated[
+    QuestionBankRepository, Depends(get_question_bank_repository)
+]
 QuestionTemplateBankRepositoryDep = Annotated[
     QuestionTemplateBankRepository,
     Depends(get_question_template_bank_repository),
@@ -465,7 +501,9 @@ def get_ai_authoring_service() -> AiAuthoringService:
     return AiAuthoringService(settings.authoring)
 
 
-AiAuthoringServiceDep = Annotated[AiAuthoringService, Depends(get_ai_authoring_service)]
+AiAuthoringServiceDep = Annotated[
+    AiAuthoringService, Depends(get_ai_authoring_service)
+]
 
 
 @lru_cache
@@ -477,7 +515,9 @@ def get_check_pilot_service() -> CheckPilotService:
     )
 
 
-CheckPilotServiceDep = Annotated[CheckPilotService, Depends(get_check_pilot_service)]
+CheckPilotServiceDep = Annotated[
+    CheckPilotService, Depends(get_check_pilot_service)
+]
 
 
 def get_provider_connection_repository(

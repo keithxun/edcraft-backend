@@ -20,15 +20,23 @@ DIGEST = "a" * 64
     "source",
     [
         {},
-        {"model_profile": "server-profile", "connection_id": str(uuid4()), "model": "m"},
+        {
+            "model_profile": "server-profile",
+            "connection_id": str(uuid4()),
+            "model": "m",
+        },
         {"connection_id": str(uuid4())},
         {"model": "m"},
         {"model_profile": ""},
     ],
 )
-def test_template_request_requires_exactly_one_model_source(source: dict[str, object]) -> None:
+def test_template_request_requires_exactly_one_model_source(
+    source: dict[str, object],
+) -> None:
     with pytest.raises(ValidationError):
-        PilotTemplateRequest.model_validate({"prompt": "Differentiate a polynomial", **source})
+        PilotTemplateRequest.model_validate(
+            {"prompt": "Differentiate a polynomial", **source}
+        )
 
 
 @pytest.mark.parametrize("prompt", ["", "   ", "\n\t"])
@@ -74,13 +82,19 @@ def test_template_request_bounds_distractors(num_distractors: object) -> None:
 @pytest.mark.parametrize(
     "payload",
     [
-        {"template_sha256": DIGEST, "check_sha256": "not-a-digest", "decision": "approved"},
+        {
+            "template_sha256": DIGEST,
+            "check_sha256": "not-a-digest",
+            "decision": "approved",
+        },
         {"template_sha256": DIGEST, "check_sha256": DIGEST, "decision": "maybe"},
         {"template_sha256": DIGEST, "check_sha256": DIGEST},
         {"template_sha256": DIGEST, "decision": "approved"},
     ],
 )
-def test_approval_request_requires_exact_digests_and_decision(payload: dict[str, object]) -> None:
+def test_approval_request_requires_exact_digests_and_decision(
+    payload: dict[str, object],
+) -> None:
     with pytest.raises(ValidationError):
         PilotApprovalRequest.model_validate(payload)
 

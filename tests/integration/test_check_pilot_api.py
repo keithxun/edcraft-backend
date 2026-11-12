@@ -145,7 +145,11 @@ class FakeApplication:
         return self._result(
             "author_template",
             (owner_id,),
-            {"prompt": prompt, "provider": provider, "num_distractors": num_distractors},
+            {
+                "prompt": prompt,
+                "provider": provider,
+                "num_distractors": num_distractors,
+            },
         )
 
     def list_templates(self, owner_id: str) -> Any:
@@ -179,7 +183,9 @@ class FakeApplication:
             },
         )
 
-    def generate(self, owner_id: str, template_id: str, *, seed: int, quantity: int) -> Any:
+    def generate(
+        self, owner_id: str, template_id: str, *, seed: int, quantity: int
+    ) -> Any:
         return self._result(
             "generate",
             (owner_id, template_id),
@@ -323,7 +329,9 @@ async def test_all_pilot_routes_require_sign_in(env: Harness) -> None:
 
 
 @pytest.mark.asyncio
-async def test_request_validation_rejects_incomplete_or_coerced_input(env: Harness) -> None:
+async def test_request_validation_rejects_incomplete_or_coerced_input(
+    env: Harness,
+) -> None:
     for payload in (
         {"prompt": "Differentiate"},
         {**template_payload(), "model_profile": None},
@@ -338,7 +346,9 @@ async def test_request_validation_rejects_incomplete_or_coerced_input(env: Harne
         template_payload(num_distractors=True),
         template_payload(unknown=True),
     ):
-        response = await env.client.post("/ai-authoring/check-pilot/templates", json=payload)
+        response = await env.client.post(
+            "/ai-authoring/check-pilot/templates", json=payload
+        )
         assert response.status_code == 422, (payload, response.text)
 
     for payload in (
@@ -387,7 +397,9 @@ async def test_profile_authoring_returns_the_ai_record_and_closes_provider(
 
 
 @pytest.mark.asyncio
-async def test_byok_authoring_resolves_the_existing_connection_once(env: Harness) -> None:
+async def test_byok_authoring_resolves_the_existing_connection_once(
+    env: Harness,
+) -> None:
     connection_id = uuid4()
     env.connections.connection = ResolvedConnection.for_connection(
         connection_id=connection_id,
@@ -412,12 +424,16 @@ async def test_byok_authoring_resolves_the_existing_connection_once(env: Harness
 
 
 @pytest.mark.asyncio
-async def test_list_get_approval_and_generation_use_the_same_owner(env: Harness) -> None:
+async def test_list_get_approval_and_generation_use_the_same_owner(
+    env: Harness,
+) -> None:
     templates = await env.client.get("/ai-authoring/check-pilot/templates")
     assert templates.status_code == 200
     assert templates.json() == [TEMPLATE]
 
-    template = await env.client.get("/ai-authoring/check-pilot/templates/template-polynomial-diff")
+    template = await env.client.get(
+        "/ai-authoring/check-pilot/templates/template-polynomial-diff"
+    )
     assert template.status_code == 200
     assert template.json() == TEMPLATE
 
@@ -425,13 +441,19 @@ async def test_list_get_approval_and_generation_use_the_same_owner(env: Harness)
     assert checks.status_code == 200
     assert checks.json() == [CHECK]
 
-    check = await env.client.get("/ai-authoring/check-pilot/checks/check-polynomial-diff")
+    check = await env.client.get(
+        "/ai-authoring/check-pilot/checks/check-polynomial-diff"
+    )
     assert check.status_code == 200
     assert check.json() == CHECK
 
     approval = await env.client.post(
         "/ai-authoring/check-pilot/templates/template-polynomial-diff/approval",
-        json={"template_sha256": DIGEST, "check_sha256": DIGEST, "decision": "approved"},
+        json={
+            "template_sha256": DIGEST,
+            "check_sha256": DIGEST,
+            "decision": "approved",
+        },
     )
     assert approval.status_code == 200, approval.text
     assert approval.json()["approval"] == "approved"
@@ -490,9 +512,13 @@ async def test_ai_pilot_failures_map_to_contract_statuses(
 
 
 @pytest.mark.asyncio
-async def test_failures_are_safe_and_never_return_a_passing_record(env: Harness) -> None:
+async def test_failures_are_safe_and_never_return_a_passing_record(
+    env: Harness,
+) -> None:
     env.app_model.error = RuntimeError("provider exploded with sk-secret")
-    response = await env.client.post("/ai-authoring/check-pilot/templates", json=template_payload())
+    response = await env.client.post(
+        "/ai-authoring/check-pilot/templates", json=template_payload()
+    )
     assert response.status_code == 503
     assert "sk-secret" not in response.text
     assert "provider exploded" not in response.text
@@ -509,11 +535,15 @@ async def test_timeout_and_admission_are_bounded_and_visible(tmp_path: Path) -> 
     ) as env:
         env.app_model.release = threading.Event()
         first = asyncio.create_task(
-            env.client.post("/ai-authoring/check-pilot/templates", json=template_payload())
+            env.client.post(
+                "/ai-authoring/check-pilot/templates", json=template_payload()
+            )
         )
         assert await asyncio.to_thread(env.app_model.entered.wait, 2)
 
-        busy = await env.client.post("/ai-authoring/check-pilot/templates", json=template_payload())
+        busy = await env.client.post(
+            "/ai-authoring/check-pilot/templates", json=template_payload()
+        )
         assert busy.status_code == 429
 
         timed_out = await first

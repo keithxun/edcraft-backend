@@ -134,7 +134,9 @@ class FakeApplication:
             },
         )
 
-    def generate(self, owner_id: str, template_id: str, *, seed: int, quantity: int) -> Any:
+    def generate(
+        self, owner_id: str, template_id: str, *, seed: int, quantity: int
+    ) -> Any:
         return self._record(
             "generate",
             (owner_id, template_id),
@@ -158,7 +160,9 @@ def make_service(
         return provider or FakeProvider()
 
     service = CheckPilotService(
-        authoring=AuthoringSettings(storage_dir=tmp_path / "authoring", model_profiles=[PROFILE]),
+        authoring=AuthoringSettings(
+            storage_dir=tmp_path / "authoring", model_profiles=[PROFILE]
+        ),
         settings=CheckPilotSettings(
             max_concurrent_requests=max_concurrent_requests,
             admission_timeout_seconds=admission_timeout_seconds,
@@ -267,7 +271,9 @@ async def test_missing_resolved_connection_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(CheckPilotInputError):
         await service.author_template(
             uuid4(),
-            PilotTemplateRequest(prompt="Differentiate", connection_id=uuid4(), model="m"),
+            PilotTemplateRequest(
+                prompt="Differentiate", connection_id=uuid4(), model="m"
+            ),
             connection=None,
         )
 
@@ -285,7 +291,9 @@ async def test_timeout_holds_admission_until_the_worker_returns(tmp_path: Path) 
         admission_timeout_seconds=0.05,
         request_timeout_seconds=0.05,
     )
-    request = PilotTemplateRequest(prompt="Differentiate", model_profile="pilot-profile")
+    request = PilotTemplateRequest(
+        prompt="Differentiate", model_profile="pilot-profile"
+    )
 
     with pytest.raises(CheckPilotTimeout):
         await service.author_template(uuid4(), request, connection=None)
@@ -352,15 +360,21 @@ async def test_generate_enforces_authoring_quantity_limit(tmp_path: Path) -> Non
     )
 
     with pytest.raises(CheckPilotInputError):
-        await service.generate(uuid4(), "template-1", PilotGenerateRequest(seed=0, quantity=3))
+        await service.generate(
+            uuid4(), "template-1", PilotGenerateRequest(seed=0, quantity=3)
+        )
     assert app.calls == []
 
-    await service.generate(uuid4(), "template-1", PilotGenerateRequest(seed=0, quantity=2))
+    await service.generate(
+        uuid4(), "template-1", PilotGenerateRequest(seed=0, quantity=2)
+    )
     assert app.calls[0][2] == {"seed": 0, "quantity": 2}
 
 
 @pytest.mark.asyncio
-async def test_reads_and_decisions_forward_owner_and_exact_digests(tmp_path: Path) -> None:
+async def test_reads_and_decisions_forward_owner_and_exact_digests(
+    tmp_path: Path,
+) -> None:
     app = FakeApplication()
     service, _ = make_service(tmp_path, app)
     owner = uuid4()

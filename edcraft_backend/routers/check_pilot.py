@@ -23,7 +23,10 @@ _ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     409: {"model": ErrorResponse, "description": "Stale digest or immutable conflict."},
     422: {"model": ErrorResponse, "description": "Unsupported pilot request."},
     429: {"model": ErrorResponse, "description": "Check authoring admission is full."},
-    503: {"model": ErrorResponse, "description": "Pilot worker, provider or storage failed."},
+    503: {
+        "model": ErrorResponse,
+        "description": "Pilot worker, provider or storage failed.",
+    },
     504: {"model": ErrorResponse, "description": "Pilot worker or provider timed out."},
 }
 
@@ -52,7 +55,9 @@ async def author_template(
     """Author one qualified private template with the resolved author model."""
     connection: ResolvedConnection | None = None
     if payload.connection_id is not None:
-        connection = await connections.resolve(user.id, payload.connection_id, payload.model)
+        connection = await connections.resolve(
+            user.id, payload.connection_id, payload.model
+        )
     record = await service.author_template(user.id, payload, connection=connection)
     return _dump(record)
 

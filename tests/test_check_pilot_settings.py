@@ -28,7 +28,9 @@ def test_check_pilot_settings_reject_unbounded_values() -> None:
         CheckPilotSettings(request_timeout_seconds=0)
 
 
-def test_check_pilot_root_is_derived_from_the_authoring_directory(tmp_path: Path) -> None:
+def test_check_pilot_root_is_derived_from_the_authoring_directory(
+    tmp_path: Path,
+) -> None:
     from edcraft_backend.services.check_pilot_service import CheckPilotService
 
     authoring = AuthoringSettings(storage_dir=tmp_path / "authoring")
