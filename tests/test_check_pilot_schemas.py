@@ -34,9 +34,7 @@ def test_template_request_requires_exactly_one_model_source(
     source: dict[str, object],
 ) -> None:
     with pytest.raises(ValidationError):
-        PilotTemplateRequest.model_validate(
-            {"prompt": "Differentiate a polynomial", **source}
-        )
+        PilotTemplateRequest.model_validate({"prompt": "Differentiate a polynomial", **source})
 
 
 @pytest.mark.parametrize("prompt", ["", "   ", "\n\t"])
@@ -109,6 +107,48 @@ def test_approval_request_accepts_approved_and_rejected() -> None:
             }
         )
         assert request.decision == decision
+
+
+def test_approval_request_allows_rejecting_without_a_check_digest() -> None:
+    omitted = PilotApprovalRequest.model_validate(
+        {"template_sha256": DIGEST, "decision": "rejected"}
+    )
+    assert omitted.check_sha256 is None
+
+    explicit_null = PilotApprovalRequest.model_validate(
+        {"template_sha256": DIGEST, "check_sha256": None, "decision": "rejected"}
+    )
+    assert explicit_null.check_sha256 is None
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"template_sha256": DIGEST, "decision": "approved"},
+        {"template_sha256": DIGEST, "check_sha256": None, "decision": "approved"},
+    ],
+)
+def test_approval_request_requires_a_check_digest_when_approved(
+    payload: dict[str, object],
+) -> None:
+    # FastAPI renders this schema failure as HTTP 422.
+    with pytest.raises(ValidationError):
+        PilotApprovalRequest.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    "check_sha256",
+    ["not-a-digest", "A" * 64, "a" * 63, f"{DIGEST}a", ""],
+)
+def test_approval_request_rejects_malformed_check_digests(check_sha256: str) -> None:
+    with pytest.raises(ValidationError):
+        PilotApprovalRequest.model_validate(
+            {
+                "template_sha256": DIGEST,
+                "check_sha256": check_sha256,
+                "decision": "rejected",
+            }
+        )
 
 
 def test_generate_request_defaults_to_one_and_bounds_values() -> None:

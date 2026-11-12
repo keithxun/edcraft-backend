@@ -121,7 +121,7 @@ class FakeApplication:
         template_id: str,
         *,
         template_sha256: str,
-        check_sha256: str,
+        check_sha256: str | None,
         decision: str,
     ) -> Any:
         return self._record(
@@ -134,9 +134,7 @@ class FakeApplication:
             },
         )
 
-    def generate(
-        self, owner_id: str, template_id: str, *, seed: int, quantity: int
-    ) -> Any:
+    def generate(self, owner_id: str, template_id: str, *, seed: int, quantity: int) -> Any:
         return self._record(
             "generate",
             (owner_id, template_id),
@@ -160,9 +158,7 @@ def make_service(
         return provider or FakeProvider()
 
     service = CheckPilotService(
-        authoring=AuthoringSettings(
-            storage_dir=tmp_path / "authoring", model_profiles=[PROFILE]
-        ),
+        authoring=AuthoringSettings(storage_dir=tmp_path / "authoring", model_profiles=[PROFILE]),
         settings=CheckPilotSettings(
             max_concurrent_requests=max_concurrent_requests,
             admission_timeout_seconds=admission_timeout_seconds,
@@ -271,9 +267,7 @@ async def test_missing_resolved_connection_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(CheckPilotInputError):
         await service.author_template(
             uuid4(),
-            PilotTemplateRequest(
-                prompt="Differentiate", connection_id=uuid4(), model="m"
-            ),
+            PilotTemplateRequest(prompt="Differentiate", connection_id=uuid4(), model="m"),
             connection=None,
         )
 
@@ -291,9 +285,7 @@ async def test_timeout_holds_admission_until_the_worker_returns(tmp_path: Path) 
         admission_timeout_seconds=0.05,
         request_timeout_seconds=0.05,
     )
-    request = PilotTemplateRequest(
-        prompt="Differentiate", model_profile="pilot-profile"
-    )
+    request = PilotTemplateRequest(prompt="Differentiate", model_profile="pilot-profile")
 
     with pytest.raises(CheckPilotTimeout):
         await service.author_template(uuid4(), request, connection=None)
@@ -360,14 +352,10 @@ async def test_generate_enforces_authoring_quantity_limit(tmp_path: Path) -> Non
     )
 
     with pytest.raises(CheckPilotInputError):
-        await service.generate(
-            uuid4(), "template-1", PilotGenerateRequest(seed=0, quantity=3)
-        )
+        await service.generate(uuid4(), "template-1", PilotGenerateRequest(seed=0, quantity=3))
     assert app.calls == []
 
-    await service.generate(
-        uuid4(), "template-1", PilotGenerateRequest(seed=0, quantity=2)
-    )
+    await service.generate(uuid4(), "template-1", PilotGenerateRequest(seed=0, quantity=2))
     assert app.calls[0][2] == {"seed": 0, "quantity": 2}
 
 
@@ -406,6 +394,46 @@ async def test_reads_and_decisions_forward_owner_and_exact_digests(
         "check_sha256": DIGEST,
         "decision": "approved",
     }
+
+
+@pytest.mark.asyncio
+async def test_check_less_rejection_reaches_the_application_with_none(
+    tmp_path: Path,
+) -> None:
+    app = FakeApplication()
+    service, _ = make_service(tmp_path, app)
+    owner = uuid4()
+
+    await service.decide(
+        owner,
+        "template-1",
+        PilotApprovalRequest(template_sha256=DIGEST, decision="rejected"),
+    )
+
+    name, args, kwargs = app.calls[0]
+    assert name == "decide"
+    assert args == (str(owner), "template-1")
+    assert kwargs == {
+        "template_sha256": DIGEST,
+        "check_sha256": None,
+        "decision": "rejected",
+    }
+
+
+@pytest.mark.asyncio
+async def test_approval_maps_ai_input_error_to_unprocessable(tmp_path: Path) -> None:
+    app = FakeApplication()
+    app.error = PilotInputError("check_sha256 must be a lowercase sha256")
+    service, _ = make_service(tmp_path, app)
+
+    with pytest.raises(CheckPilotInputError) as raised:
+        await service.decide(
+            uuid4(),
+            "template-1",
+            PilotApprovalRequest(template_sha256=DIGEST, decision="rejected"),
+        )
+
+    assert raised.value.status_code == 422
 
 
 def test_default_application_import_is_lazy_and_does_not_touch_storage(

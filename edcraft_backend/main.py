@@ -60,9 +60,7 @@ app = FastAPI(
 
 
 @app.exception_handler(EdCraftBaseException)
-async def edcraft_exception_handler(
-    request: Request, exc: EdCraftBaseException
-) -> JSONResponse:
+async def edcraft_exception_handler(request: Request, exc: EdCraftBaseException) -> JSONResponse:
     """Handle custom EdCraft exceptions."""
     return JSONResponse(
         status_code=exc.status_code,

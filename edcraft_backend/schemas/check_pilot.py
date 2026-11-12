@@ -43,11 +43,21 @@ class PilotTemplateRequest(AuthoringModelSelection):
 
 
 class PilotApprovalRequest(_StrictRequest):
-    """Human decision bound to the exact template and check digests shown."""
+    """Human decision bound to the exact template digest shown.
+
+    Rejecting a draft never needs a qualified check, so the check digest is
+    optional. Approving still requires the digest of the reviewed check.
+    """
 
     template_sha256: Sha256
-    check_sha256: Sha256
+    check_sha256: Sha256 | None = None
     decision: Decision
+
+    @model_validator(mode="after")
+    def require_check_digest_for_approval(self) -> "PilotApprovalRequest":
+        if self.decision == "approved" and self.check_sha256 is None:
+            raise ValueError("check_sha256 is required to approve a template")
+        return self
 
 
 class PilotGenerateRequest(_StrictRequest):
