@@ -53,9 +53,7 @@ class CheckPilotError(EdCraftBaseException):
 class CheckPilotNotFound(CheckPilotError):
     """The owner has no such private pilot artifact."""
 
-    def __init__(
-        self, message: str = "The requested check pilot record was not found."
-    ) -> None:
+    def __init__(self, message: str = "The requested check pilot record was not found.") -> None:
         super().__init__(message, 404)
 
 
@@ -71,9 +69,7 @@ class CheckPilotConflict(CheckPilotError):
 class CheckPilotInputError(CheckPilotError):
     """The request is well-formed HTTP but unsupported by the pilot."""
 
-    def __init__(
-        self, message: str = "The check pilot request could not be accepted."
-    ) -> None:
+    def __init__(self, message: str = "The check pilot request could not be accepted.") -> None:
         super().__init__(message, 422)
 
 
@@ -164,9 +160,7 @@ class CheckPilotService:
         authoring: AuthoringSettings,
         settings: CheckPilotSettings,
         application_factory: Callable[[], PilotApplication] | None = None,
-        provider_builder: Callable[
-            [ResolvedConnection], ModelProvider
-        ] = build_plan_provider,
+        provider_builder: Callable[[ResolvedConnection], ModelProvider] = build_plan_provider,
     ) -> None:
         self._authoring = authoring
         self._settings = settings
@@ -261,9 +255,7 @@ class CheckPilotService:
     ) -> PilotBatch:
         limit = min(self._authoring.max_quantity, 50)
         if request.quantity > limit:
-            raise CheckPilotInputError(
-                f"Quantity must be at most {limit} for this server."
-            )
+            raise CheckPilotInputError(f"Quantity must be at most {limit} for this server.")
         owner = str(owner_id)
         return await self._execute(
             lambda: self._application_factory().generate(

@@ -52,9 +52,7 @@ async def author_template(
     """Author one qualified private template with the resolved author model."""
     connection: ResolvedConnection | None = None
     if payload.connection_id is not None:
-        connection = await connections.resolve(
-            user.id, payload.connection_id, payload.model
-        )
+        connection = await connections.resolve(user.id, payload.connection_id, payload.model)
     return await service.author_template(user.id, payload, connection=connection)
 
 
