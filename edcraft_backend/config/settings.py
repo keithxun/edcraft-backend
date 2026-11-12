@@ -255,6 +255,39 @@ class AuthoringSettings(BaseSettings):
         return self
 
 
+class CheckPilotSettings(BaseSettings):
+    """Bounded runtime limits for the private check authoring pilot."""
+
+    model_config = SettingsConfigDict(
+        env_file=None, env_prefix="CHECK_PILOT_", case_sensitive=False, extra="ignore"
+    )
+
+    max_concurrent_requests: int = Field(
+        default=2,
+        ge=1,
+        le=16,
+        description=(
+            "Maximum check-pilot application/provider calls running at once. "
+            "A timed-out worker keeps its slot until its thread returns."
+        ),
+    )
+    admission_timeout_seconds: float = Field(
+        default=5.0,
+        gt=0,
+        le=60,
+        description="Maximum time a request waits for a free worker slot.",
+    )
+    request_timeout_seconds: float = Field(
+        default=180.0,
+        gt=0,
+        le=3600,
+        description=(
+            "Wall-clock bound for one check-pilot worker call, including the "
+            "author or check-author provider call."
+        ),
+    )
+
+
 class Settings(BaseSettings):
     """
     Application settings with environment-based configuration.
@@ -275,6 +308,7 @@ class Settings(BaseSettings):
     email: EmailSettings = Field(default_factory=EmailSettings)
     nomad: NomadSettings = Field(default_factory=NomadSettings)
     authoring: AuthoringSettings = Field(default_factory=AuthoringSettings)
+    check_pilot: CheckPilotSettings = Field(default_factory=CheckPilotSettings)
 
     # Standalone settings
     log_level: str = Field(default="info", description="Logging level")
