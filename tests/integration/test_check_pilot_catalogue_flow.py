@@ -527,3 +527,42 @@ async def test_stale_saved_check_hash_fails_closed(tmp_path: Path) -> None:
         )
         # A stale reference never stores a second check.
         assert len((await harness.client.get(f"{BASE}/checks")).json()) == 1
+
+
+@pytest.mark.asyncio
+async def test_contract_degree_bounds_are_enforced_through_http(tmp_path: Path) -> None:
+    # Differentiation is trusted through degree 5 ...
+    quintic = {
+        CHECK_PLAN: [plan(DIFFERENTIATE, degree=5)],
+        CHECK_RECIPE: [check(DIFFERENTIATE)],
+        POLYNOMIAL_FAMILY: [template(DIFFERENTIATE, degree=5)],
+    }
+    # ... while real equation/inequality contracts stop at degree 2.
+    cubic = invalid_solve_script(
+        plan(EQUATION, relation="eq", degree=3),
+        check_contract=EQUATION,
+        template_contract=EQUATION,
+        relation="eq",
+        degree=3,
+        include_check=False,
+    )
+    scripts = ProviderScripts([quintic, cubic])
+    async with _harness(tmp_path, scripts) as harness:
+        created = await _author(harness.client, "Differentiate a quintic")
+        assert created.status_code == 200, created.text
+        record = created.json()
+        assert record["status"] == "ready", record["findings"]
+        assert record["selection"]["contract_id"] == DIFFERENTIATE
+        assert record["template"]["family"]["degree"] == 5
+
+        created = await _author(harness.client, "Solve a cubic equation")
+        assert created.status_code == 200, created.text
+        record = created.json()
+        _assert_fail_closed(record)
+        assert record["selection"] is None
+        assert any(
+            "degree" in finding.lower() or "contract" in finding.lower()
+            for finding in record["findings"]
+        )
+        # The unsupported cubic never replaces or adds a stored check.
+        assert len((await harness.client.get(f"{BASE}/checks")).json()) == 1
