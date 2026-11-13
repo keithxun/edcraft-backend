@@ -103,6 +103,9 @@ BATCH = {
             "answer": "6x",
             "parameters": {"a": 3},
             "check_ref": CHECK_REF,
+            "engine_outcome": None,
+            "kernel_verdict": None,
+            "grader": "kernel",
         }
     ],
     "requested_quantity": 1,

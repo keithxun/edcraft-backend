@@ -3,7 +3,9 @@
 The fixture was authored and approved by the frozen ``ef8bc08`` AI package
 before the reusable-check catalogue. The backend must keep serving those
 private records after the AI upgrade, without rewriting their content or
-digests.
+digests. The validator upgrade adds ``grader``/``engine_outcome``/
+``kernel_verdict`` to regenerated questions; the frozen mathematics is
+unchanged.
 """
 
 from __future__ import annotations
