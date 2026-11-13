@@ -25,9 +25,7 @@ class AppSettings(BaseSettings):
         env_file=None, env_prefix="APP_", case_sensitive=False, extra="ignore"
     )
 
-    env: Environment = Field(
-        default=Environment.DEVELOPMENT, description="Application environment"
-    )
+    env: Environment = Field(default=Environment.DEVELOPMENT, description="Application environment")
     name: str = Field(default="EdCraft Backend API", description="Application name")
     version: str = Field(default="0.1.0", description="Application version")
 
@@ -78,9 +76,7 @@ class CorsSettings(BaseSettings):
         default=["http://localhost:5173", "http://127.0.0.1:5173"],
         description="Allowed CORS origins",
     )
-    allow_credentials: bool = Field(
-        default=True, description="Allow credentials in CORS requests"
-    )
+    allow_credentials: bool = Field(default=True, description="Allow credentials in CORS requests")
 
 
 class ServerSettings(BaseSettings):
@@ -119,9 +115,7 @@ class OAuthGoogleSettings(BaseSettings):
 
     client_id: str | None = Field(default=None)
     client_secret: str | None = Field(default=None)
-    redirect_uri: str = Field(
-        default="http://localhost:8000/auth/oauth/google/callback"
-    )
+    redirect_uri: str = Field(default="http://localhost:8000/auth/oauth/google/callback")
 
 
 class OAuthGithubSettings(BaseSettings):
@@ -133,9 +127,7 @@ class OAuthGithubSettings(BaseSettings):
 
     client_id: str | None = Field(default=None)
     client_secret: str | None = Field(default=None)
-    redirect_uri: str = Field(
-        default="http://localhost:8000/auth/oauth/github/callback"
-    )
+    redirect_uri: str = Field(default="http://localhost:8000/auth/oauth/github/callback")
 
 
 class NomadSettings(BaseSettings):
@@ -186,9 +178,7 @@ class EmailSettings(BaseSettings):
     smtp_port: int = Field(default=587, description="SMTP server port")
     smtp_user: str | None = Field(default=None, description="SMTP username")
     smtp_password: str | None = Field(default=None, description="SMTP password")
-    from_email: str = Field(
-        default="noreply@edcraft.com", description="From email address"
-    )
+    from_email: str = Field(default="noreply@edcraft.com", description="From email address")
     from_name: str = Field(default="EdCraft", description="From name")
     enabled: bool = Field(
         default=True, description="Enable email sending (set to False for dev mode)"
@@ -255,6 +245,39 @@ class AuthoringSettings(BaseSettings):
         return self
 
 
+class CheckPilotSettings(BaseSettings):
+    """Bounded runtime limits for the private check authoring pilot."""
+
+    model_config = SettingsConfigDict(
+        env_file=None, env_prefix="CHECK_PILOT_", case_sensitive=False, extra="ignore"
+    )
+
+    max_concurrent_requests: int = Field(
+        default=2,
+        ge=1,
+        le=16,
+        description=(
+            "Maximum check-pilot application/provider calls running at once. "
+            "A timed-out worker keeps its slot until its thread returns."
+        ),
+    )
+    admission_timeout_seconds: float = Field(
+        default=5.0,
+        gt=0,
+        le=60,
+        description="Maximum time a request waits for a free worker slot.",
+    )
+    request_timeout_seconds: float = Field(
+        default=180.0,
+        gt=0,
+        le=3600,
+        description=(
+            "Wall-clock bound for one check-pilot worker call, including the "
+            "author or check-author provider call."
+        ),
+    )
+
+
 class Settings(BaseSettings):
     """
     Application settings with environment-based configuration.
@@ -275,6 +298,7 @@ class Settings(BaseSettings):
     email: EmailSettings = Field(default_factory=EmailSettings)
     nomad: NomadSettings = Field(default_factory=NomadSettings)
     authoring: AuthoringSettings = Field(default_factory=AuthoringSettings)
+    check_pilot: CheckPilotSettings = Field(default_factory=CheckPilotSettings)
 
     # Standalone settings
     log_level: str = Field(default="info", description="Logging level")

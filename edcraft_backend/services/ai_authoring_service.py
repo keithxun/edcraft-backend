@@ -26,7 +26,11 @@ from edcraft_validator.domains.domain_registry import available_domains, create_
 from edcraft_validator.llm.judge_configuration import load_judge_settings
 from pydantic import ValidationError
 
-from edcraft_backend.config.settings import AuthoringProfileSettings, AuthoringSettings
+from edcraft_backend.config.settings import (
+    AuthoringProfileSettings,
+    AuthoringSettings,
+    CheckPilotSettings,
+)
 from edcraft_backend.schemas.ai_authoring import (
     ApprovalRequest,
     ApprovalResponse,
@@ -74,7 +78,7 @@ ApprovalView = StoredReviewerApproval
 logger = logging.getLogger(__name__)
 
 # Must match [tool.uv.sources].edcraft-validator.rev in pyproject.toml.
-LIBRARY_REVISION = "783c32a2b3c186f669807a97e30d2fa9b9b3b744"
+LIBRARY_REVISION = "fae09ec3a6450c8838da4d91fffe4adeb990a35a"
 MAX_FINDING_TEXT = 2_000
 
 
@@ -87,11 +91,13 @@ class AiAuthoringService:
         *,
         store: AuthoringStore | None = None,
         executor: JobExecutor | None = None,
+        check_pilot: CheckPilotSettings | None = None,
     ) -> None:
         self.settings = settings
         self.store = store or AuthoringStore(settings)
         self._executor: JobExecutor = executor or run_library_authoring_job
         self.lifecycle = AuthoringLifecycle(self.store, settings)
+        self._check_pilot = check_pilot or CheckPilotSettings()
 
     async def startup(self) -> None:
         """Prepare storage, reconcile interruptions and bind the lifecycle."""
@@ -138,6 +144,10 @@ class AiAuthoringService:
             min_distractors=MIN_DISTRACTORS,
             max_distractors=MAX_DISTRACTORS,
             default_distractors=DEFAULT_DISTRACTORS,
+            check_pilot_timeout_seconds=(
+                self._check_pilot.admission_timeout_seconds
+                + self._check_pilot.request_timeout_seconds
+            ),
         )
 
     async def submit(
@@ -233,12 +243,22 @@ class AiAuthoringService:
         ]
         checks = attempts[-1].checks if attempts else []
         candidate = attempts[-1].candidate if attempts else None
-        template = _template_view(artifact)
-        limits = _limits(artifact) if artifact is not None else None
+        review = domain.review_view(artifact) if artifact is not None else None
+        template = (
+            ReviewTemplate(
+                template_id=review.template_id,
+                candidate=review.candidate,
+                language=review.language,
+            )
+            if review is not None
+            else None
+        )
+        limits = _limits(review.limits) if review is not None else None
         summary = job.result
         return AuthoringReviewResponse(
             job_id=job.job_id,
             state=job.state,
+            domain=job.request.domain,
             artifact_id=job.artifact_id,
             artifact_sha256=job.artifact_sha256,
             library_revision=job.library_revision,
@@ -507,7 +527,9 @@ def _validated_artifact(domain: DomainModule, artifact_bytes: bytes) -> Validate
         raise AuthoringConflict("The stored artifact is not usable.") from exc
 
 
-def _template_view(artifact: ValidatedTemplateArtifact | None) -> ReviewTemplate | None:
+def _template_view(
+    artifact: ValidatedTemplateArtifact | None, domain: DomainModule
+) -> ReviewTemplate | None:
     if artifact is None:
         return None
     template = getattr(artifact, "template", None)
@@ -518,23 +540,38 @@ def _template_view(artifact: ValidatedTemplateArtifact | None) -> ReviewTemplate
     return ReviewTemplate(
         template_id=template_id,
         candidate=candidate,
-        language=getattr(template, "language", None),
+        language=_template_language(domain),
     )
 
 
-def _limits(artifact: ValidatedTemplateArtifact) -> ValidationLimits | None:
-    validation = getattr(artifact, "validation", None)
-    if validation is None:
+def _template_language(domain: DomainModule) -> str | None:
+    """Read the optional review label without requiring it from older domains."""
+    field = "template_language"
+    return getattr(domain, field, None)
+
+
+_LIMIT_FIELDS = (
+    "examples_checked",
+    "execution_calls",
+    "max_examples",
+    "max_execution_calls",
+    "timeout_seconds",
+    "combinations_checked",
+    "max_combinations",
+)
+
+
+def _limits(recorded: dict[str, Any] | None) -> ValidationLimits | None:
+    """Project the domain-owned validation summary into the response shape."""
+    if recorded is None:
+        return None
+    if not {"validator_version", "checking_mode", "seed"} <= recorded.keys():
         return None
     return ValidationLimits(
-        validator_version=validation.validator_version,
-        checking_mode=validation.checking_mode,
-        examples_checked=validation.examples_checked,
-        execution_calls=validation.execution_calls,
-        max_examples=validation.max_examples,
-        max_execution_calls=validation.max_execution_calls,
-        timeout_seconds=validation.timeout_seconds,
-        seed=validation.seed,
+        validator_version=recorded["validator_version"],
+        checking_mode=recorded["checking_mode"],
+        seed=recorded["seed"],
+        **{field: recorded.get(field) for field in _LIMIT_FIELDS},
     )
 
 
