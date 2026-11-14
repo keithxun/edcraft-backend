@@ -23,7 +23,10 @@ from edcraft_validator.domains.code.code_types import (
 )
 from edcraft_validator.domains.domain_contract import DomainModule
 from edcraft_validator.domains.domain_registry import available_domains, create_domain
-from edcraft_validator.llm.judge_configuration import load_judge_settings
+from edcraft_validator.llm.judge_configuration import (
+    JudgeSettings,
+    load_judge_settings,
+)
 from pydantic import ValidationError
 
 from edcraft_backend.config.settings import (
@@ -109,6 +112,14 @@ class AiAuthoringService:
             self.settings.shutdown_timeout_seconds if timeout is None else timeout
         )
 
+    def _configured_judge(self) -> JudgeSettings | None:
+        """Load the server-configured advisory judge, or None when invalid."""
+        try:
+            return load_judge_settings()
+        except (ValueError, ValidationError):
+            logger.warning("Configured advisory judge settings are invalid")
+            return None
+
     async def capabilities(
         self, connections: list[ProviderConnectionResponse] | None = None
     ) -> AuthoringCapabilitiesResponse:
@@ -122,17 +133,16 @@ class AiAuthoringService:
             )
             for profile in self.settings.model_profiles
         ]
-        judge: JudgeDisplay | None
-        try:
-            configured = load_judge_settings()
-            judge = JudgeDisplay(
+        configured = self._configured_judge()
+        judge = (
+            JudgeDisplay(
                 label=f"{configured.provider} · {configured.model}",
                 provider=configured.provider,
                 model=configured.model,
             )
-        except (ValueError, ValidationError):
-            logger.warning("Configured advisory judge settings are invalid")
-            judge = None
+            if configured is not None
+            else None
+        )
         return AuthoringCapabilitiesResponse(
             enabled_domains=list(available_domains()),
             difficulty_labels=["easy", "medium", "hard"],
@@ -161,6 +171,15 @@ class AiAuthoringService:
     ) -> StoredJob:
         """Admit and persist one queued authoring job."""
         domain_request = _domain_request(request)
+        configured_judge = self._configured_judge()
+        judge_default = (
+            ResolvedConnection.for_judge(
+                provider=configured_judge.provider,
+                model=configured_judge.model,
+            )
+            if configured_judge is not None
+            else None
+        )
         runtime = JobRuntime.prepare(
             request,
             profile_lookup=self._profile,
@@ -168,6 +187,7 @@ class AiAuthoringService:
             author_connection=author_connection,
             difficulty_connection=difficulty_connection,
             relevance_connection=relevance_connection,
+            judge_default=judge_default,
         )
         author = runtime.author
         provider = author.selection.provider

@@ -560,7 +560,7 @@ async def test_submit_keeps_legacy_profile_path_working(
         assert command.author.model == "stub-model"
 
 
-async def test_judges_inherit_the_question_model_by_default(
+async def test_judges_use_the_role_defaults_when_not_selected(
     test_client: AsyncClient,
     user: User,
     tmp_path: Path,
@@ -582,7 +582,9 @@ async def test_judges_inherit_the_question_model_by_default(
 
         runtime = executor.runtimes[0]
         assert runtime.difficulty == runtime.author
-        assert runtime.relevance == runtime.author
+        assert runtime.relevance == ResolvedConnection.for_judge(
+            provider="soclaas", model="x-test-3"
+        )
         stored = await service.get_job(user.id, job_id)
         assert stored.request.judges is None
 
@@ -679,7 +681,9 @@ async def test_judge_can_use_a_server_profile_while_author_uses_a_connection(
         assert runtime.difficulty.selection.provider == "stub"
         assert runtime.difficulty.selection.model == "stub-model"
         assert runtime.difficulty.is_byok is False
-        assert runtime.relevance == runtime.author
+        assert runtime.relevance == ResolvedConnection.for_judge(
+            provider="soclaas", model="x-test-3"
+        )
 
 
 async def test_submit_rejects_unknown_disabled_or_mixed_judge_selections(

@@ -66,8 +66,15 @@ class JobRuntime:
         author_connection: ResolvedConnection | None = None,
         difficulty_connection: ResolvedConnection | None = None,
         relevance_connection: ResolvedConnection | None = None,
+        judge_default: ResolvedConnection | None = None,
     ) -> JobRuntime:
-        """Resolve all three roles from the request and pre-resolved connections."""
+        """Resolve all three roles from the request and pre-resolved connections.
+
+        ``judge_default`` is the server-configured advisory judge used when the
+        request does not override relevance. It is separate from the author
+        because a decision judge needs token probabilities, which not every
+        author model exposes.
+        """
         author = cls._author_role(
             request, profile_lookup=profile_lookup, connection=author_connection
         )
@@ -83,7 +90,7 @@ class JobRuntime:
             ),
             relevance=cls._judge_role(
                 judges.relevance if judges else None,
-                default=author,
+                default=judge_default or author,
                 connection=relevance_connection,
                 profile_lookup=profile_lookup,
                 label="Relevance",

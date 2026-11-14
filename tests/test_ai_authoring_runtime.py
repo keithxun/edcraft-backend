@@ -60,16 +60,31 @@ def _unused(*_args: Any, **_kwargs: Any) -> None:
     raise AssertionError("The executor must not run during prepare")
 
 
-def test_prepare_inherits_the_author_for_omitted_judges() -> None:
+def test_prepare_uses_the_configured_judge_for_relevance_by_default() -> None:
+    judge = ResolvedConnection.for_judge(provider="soclaas", model="x-test-3")
+    runtime = JobRuntime.prepare(
+        _request(),
+        profile_lookup=lambda _profile_id: PROFILE,
+        executor=_unused,
+        judge_default=judge,
+    )
+
+    assert runtime.author.selection.provider == "soclaas"
+    assert runtime.author.selection.model == "profile-model"
+    assert runtime.author.is_byok is False
+    assert runtime.difficulty == runtime.author
+    assert runtime.relevance == judge
+    assert runtime.relevance.is_byok is False
+    assert runtime.relevance.selection.model == "x-test-3"
+
+
+def test_prepare_falls_back_to_the_author_without_a_judge_default() -> None:
     runtime = JobRuntime.prepare(
         _request(),
         profile_lookup=lambda _profile_id: PROFILE,
         executor=_unused,
     )
 
-    assert runtime.author.selection.provider == "soclaas"
-    assert runtime.author.selection.model == "profile-model"
-    assert runtime.author.is_byok is False
     assert runtime.difficulty == runtime.author
     assert runtime.relevance == runtime.author
 
@@ -81,16 +96,38 @@ def test_prepare_uses_the_pre_resolved_judge_connection() -> None:
             connection_id=difficulty.connection_id, model="judge-difficulty"
         )
     )
+    judge_default = ResolvedConnection.for_judge(provider="soclaas", model="x-test-3")
 
     runtime = JobRuntime.prepare(
         _request(judges=judges),
         profile_lookup=lambda _profile_id: PROFILE,
         executor=_unused,
         difficulty_connection=difficulty,
+        judge_default=judge_default,
     )
 
     assert runtime.difficulty is difficulty
-    assert runtime.relevance == runtime.author
+    assert runtime.relevance == judge_default
+
+
+def test_prepare_keeps_an_explicit_relevance_connection_over_the_default() -> None:
+    relevance = _connection("judge-relevance")
+    judges = AuthoringJudgeSelections(
+        relevance=AuthoringModelSelection(
+            connection_id=relevance.connection_id, model="judge-relevance"
+        )
+    )
+    judge_default = ResolvedConnection.for_judge(provider="soclaas", model="x-test-3")
+
+    runtime = JobRuntime.prepare(
+        _request(judges=judges),
+        profile_lookup=lambda _profile_id: PROFILE,
+        executor=_unused,
+        relevance_connection=relevance,
+        judge_default=judge_default,
+    )
+
+    assert runtime.relevance is relevance
 
 
 def test_prepare_allows_a_profile_judge_over_a_byok_author() -> None:
