@@ -381,13 +381,28 @@ async def test_real_scripted_math_pipeline_round_trips_through_api(
 ) -> None:
     async with env_for(tmp_path, run_scripted_math_pipeline) as env:
         job_id = await complete_job(
-            env, domain="math", prompt="Create a linear equation question for x"
+            env,
+            domain="math",
+            prompt="Create a linear equation question for x",
+            difficulty="medium",
         )
         envelope = await review(env, job_id)
         assert envelope["request"]["domain"] == "math"
-        assert envelope["template"]["candidate"]["equation_template"] == "{a}x + {b} = {c}"
-        assert envelope["validation_limits"]["checking_mode"] == "exhaustive_domain"
-        assert envelope["validation_limits"]["combinations_checked"] == 8
+        candidate = envelope["template"]["candidate"]
+        assert candidate["item"]["topic"] == "school.linear"
+        assert candidate["item"]["body"]["goal"] == {
+            "kind": "solve",
+            "symbol": "x",
+            "symbols": [],
+            "expr": None,
+            "point": None,
+            "order": 1,
+            "domain": "real",
+            "matrix": None,
+        }
+        assert len(candidate["item"]["body"]["distractors"]) == 3
+        assert envelope["validation_limits"]["checking_mode"] == "property_based"
+        assert envelope["validation_limits"]["combinations_checked"] == 12
         assert [check["status"] for check in envelope["checks"]] == ["passed"] * 4
         assert [check["advisory"] for check in envelope["checks"]] == [
             False,
@@ -454,7 +469,7 @@ async def test_stub_domain_round_trips_through_the_real_service(
 @pytest.mark.asyncio
 async def test_math_domain_round_trips_through_the_real_service(tmp_path: Path) -> None:
     async with env_for(tmp_path, StaticExecutor(make_math_checked_report)) as env:
-        job_id = await complete_job(env, domain="math")
+        job_id = await complete_job(env, domain="math", difficulty="medium")
         status = (await env.client.get(f"/ai-authoring/jobs/{job_id}")).json()
         assert status["result"]["domain"] == "math"
         assert status["result"]["status"] == "checked"
@@ -465,18 +480,22 @@ async def test_math_domain_round_trips_through_the_real_service(tmp_path: Path) 
         envelope = await review(env, job_id)
         assert envelope["domain"] == "math"
         assert envelope["request"]["domain"] == "math"
-        assert envelope["template"]["template_id"] == "math.easy.linear_equation"
+        assert envelope["template"]["template_id"] == "math.medium.linear_equation"
         assert envelope["template"]["language"] is None
         candidate = envelope["template"]["candidate"]
-        assert candidate["equation_template"] == "{a}x + {b} = {c}"
-        assert candidate["answer_expression"] == "(c - b) / a"
-        assert len(candidate["distractors"]) == 3
+        assert candidate["item"]["topic"] == "school.linear"
+        assert candidate["item"]["parameters"] == [
+            {"name": "a", "values": ["2", "3", "5"]},
+            {"name": "b", "values": ["1", "4"]},
+            {"name": "c", "values": ["7", "10"]},
+        ]
+        assert len(candidate["item"]["body"]["distractors"]) == 3
 
         limits = envelope["validation_limits"]
         assert limits["validator_version"] == "mcp-math-template-v1"
-        assert limits["checking_mode"] == "exhaustive_domain"
-        assert limits["combinations_checked"] == 8
-        assert limits["max_combinations"] == 8
+        assert limits["checking_mode"] == "property_based"
+        assert limits["combinations_checked"] == 12
+        assert limits["max_combinations"] == 12
         assert limits["seed"] == 0
         # The code-domain sampled budget stays absent for math.
         assert limits["examples_checked"] is None
@@ -486,8 +505,8 @@ async def test_math_domain_round_trips_through_the_real_service(tmp_path: Path) 
         assert limits["timeout_seconds"] is None
 
         assert [check["tool"] for check in envelope["checks"]] == [
-            "math_verify_template_structure",
-            "math_validate_answers_and_distractors",
+            "math_verify_item_spec",
+            "math_validate_options",
             "math_assess_template_difficulty",
             "assess_template_relevance",
         ]
@@ -505,7 +524,7 @@ async def test_math_domain_round_trips_through_the_real_service(tmp_path: Path) 
         assert preview.status_code == 200, preview.text
         assert preview.json()["domain"] == "math"
         question = MathQuestionInstance.model_validate(preview.json()["question"])
-        assert question.template_id == "math.easy.linear_equation"
+        assert question.template_id == "math.medium.linear_equation"
         assert question.seed == 7
         assert set(question.parameters) == {"a", "b", "c"}
         assert question.answer == question.choices[question.correct_index]

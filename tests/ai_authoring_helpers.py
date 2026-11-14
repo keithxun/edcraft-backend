@@ -32,6 +32,19 @@ from edcraft_validator.domains.code.code_schemas import (
 from edcraft_validator.domains.domain_registry import create_domain
 from edcraft_validator.domains.domain_support import build_review_view
 from edcraft_validator.domains.math.candidate_builder import template_sha256
+from edcraft_validator.domains.math.ir.schema import (
+    AnswerRecipe,
+    Distractor,
+    Expr,
+    Given,
+    Goal,
+    MathItemSpec,
+    MathTemplateSpec,
+    ParameterSpec,
+    Relation,
+    SymbolSpec,
+    TextSpec,
+)
 from edcraft_validator.domains.math.math_schemas import (
     MathQuestionInstance,
     MathTemplateCandidate,
@@ -39,9 +52,9 @@ from edcraft_validator.domains.math.math_schemas import (
     ValidatedMathTemplate,
 )
 from edcraft_validator.domains.math.math_types import (
-    MATH_ANSWERS_TOOL,
     MATH_DIFFICULTY_TOOL,
-    MATH_STRUCTURE_TOOL,
+    MATH_ITEM_SPEC_TOOL,
+    MATH_OPTIONS_TOOL,
 )
 from edcraft_validator.domains.math.proposal_response import MathProposalResponse
 from edcraft_validator.llm.llm_contracts import PlannedGenerationResponse
@@ -94,47 +107,92 @@ PROPOSAL_FIELDS = (
 )
 
 
+def _sym(name: str) -> Expr:
+    return Expr(sym=name)
+
+
+def _param(name: str) -> Expr:
+    return Expr(param=name)
+
+
+def _add(*args: Expr) -> Expr:
+    return Expr(op="add", args=list(args))
+
+
+def _mul(*args: Expr) -> Expr:
+    return Expr(op="mul", args=list(args))
+
+
+def _sub(left: Expr, right: Expr) -> Expr:
+    return Expr(op="sub", args=[left, right])
+
+
+def _div(left: Expr, right: Expr) -> Expr:
+    return Expr(op="div", args=[left, right])
+
+
+def _math_item_spec() -> MathTemplateSpec:
+    """A small finite linear-equation family: 3 x 2 x 2 declared variants."""
+    body = MathItemSpec(
+        topic="school.linear",
+        symbols=[SymbolSpec(name="x", domain="real")],
+        givens=[
+            Given(
+                id="equation",
+                relation=Relation(
+                    kind="eq",
+                    lhs=_add(_mul(_param("a"), _sym("x")), _param("b")),
+                    rhs=_param("c"),
+                ),
+            )
+        ],
+        goal=Goal(kind="solve", symbol="x", domain="real"),
+        answer_recipe=AnswerRecipe(
+            kind="set",
+            items=[_div(_sub(_param("c"), _param("b")), _param("a"))],
+        ),
+        distractors=[
+            Distractor(
+                value=_div(_sub(_param("b"), _param("c")), _param("a")),
+                misconception="SIGN_ERROR",
+                reason="Negates the numerator",
+            ),
+            Distractor(
+                value=_sub(_param("c"), _param("b")),
+                misconception="NO_DIVISION",
+                reason="Omits dividing by a",
+            ),
+            Distractor(
+                value=_div(_add(_param("c"), _param("b")), _param("a")),
+                misconception="ADD_NOT_SUBTRACT",
+                reason="Adds b instead of subtracting",
+            ),
+        ],
+        text=TextSpec(mode="symbolic", template="Solve {equation} for x."),
+    )
+    return MathTemplateSpec(
+        topic="school.linear",
+        parameters=[
+            ParameterSpec(name="a", values=["2", "3", "5"]),
+            ParameterSpec(name="b", values=["1", "4"]),
+            ParameterSpec(name="c", values=["7", "10"]),
+        ],
+        body=body,
+    )
+
+
 MATH_CANDIDATE: dict[str, Any] = {
-    "template_id": "math.easy.linear_equation",
-    "difficulty": "easy",
-    "equation_template": "{a}x + {b} = {c}",
-    "question_template": "Solve for x: {equation}",
-    "parameters": [
-        {"name": "a", "values": [2, 3]},
-        {"name": "b", "values": [1, 4]},
-        {"name": "c", "values": [5, 8]},
-    ],
-    "answer_expression": "(c - b) / a",
-    # Every recipe is wrong for every declared combination and they stay
-    # pairwise distinct because 0 < c - b < c < c + b while a >= 2.
-    "distractors": [
-        {
-            "expression": "c - b",
-            "reason_template": "Subtracts b but does not divide by a.",
-        },
-        {
-            "expression": "c + b",
-            "reason_template": "Adds b instead of subtracting it before dividing by a.",
-        },
-        {
-            "expression": "c",
-            "reason_template": "Uses c without subtracting b or dividing by a.",
-        },
-    ],
+    "template_id": "math.medium.linear_equation",
+    "difficulty": "medium",
     "question_type": "mcq",
+    "item": _math_item_spec().model_dump(mode="json"),
 }
 
-MATH_PROPOSAL_FIELDS = (
-    "equation_template",
-    "question_template",
-    "parameters",
-    "answer_expression",
-    "distractors",
-)
+MATH_PROPOSAL_FIELDS = ("item",)
 
 MATH_CHECKS = (
-    MATH_STRUCTURE_TOOL,
-    MATH_ANSWERS_TOOL,
+    MATH_ITEM_SPEC_TOOL,
+    MATH_OPTIONS_TOOL,
     MATH_DIFFICULTY_TOOL,
     TEMPLATE_RELEVANCE_CHECK,
 )
@@ -316,7 +374,7 @@ def make_math_command(job_id: UUID | None = None) -> AuthoringJobCommand:
         author={"provider": "stub", "model": "stub-model"},
         request={
             "prompt": "Create a linear equation question for x",
-            "difficulty": "easy",
+            "difficulty": "medium",
             "num_distractors": 3,
         },
     )
@@ -467,32 +525,30 @@ def make_checked_report(
 
 
 def make_math_checked_report(command: AuthoringJobCommand) -> AuthoringResult:
-    """Build a real validated math artifact with exhaustive review evidence."""
+    """Build a real validated math artifact with sampled review evidence."""
     candidate = MathTemplateCandidate.model_validate(MATH_CANDIDATE)
     checked_digest = template_sha256(candidate)
+    combinations = 12
     validation = MathValidationSummary(
-        checking_mode="exhaustive_domain",
-        combinations_checked=8,
-        max_combinations=8,
+        checking_mode="property_based",
+        combinations_checked=combinations,
+        max_combinations=combinations,
         seed=0,
         evidence=[
             ValidationEvidence(
-                check=MATH_STRUCTURE_TOOL,
+                check=MATH_ITEM_SPEC_TOOL,
                 status="passed",
-                details={"tool_version": "1.0.0"},
+                details={"tool_version": "1.1.0"},
             ),
             ValidationEvidence(
-                check=MATH_ANSWERS_TOOL,
+                check=MATH_OPTIONS_TOOL,
                 status="passed",
                 details={
-                    "tool_version": "1.0.0",
-                    "checking_mode": "exhaustive_domain",
-                    "combinations_checked": 8,
-                    "max_combinations": 8,
+                    "tool_version": "1.1.0",
+                    "checking_mode": "property_based",
+                    "combinations_checked": combinations,
+                    "max_combinations": combinations,
                     "seed": 0,
-                    "selected_distractors": [
-                        recipe.model_dump(mode="json") for recipe in candidate.distractors
-                    ],
                 },
             ),
             ValidationEvidence(
@@ -525,32 +581,31 @@ def make_math_checked_report(command: AuthoringJobCommand) -> AuthoringResult:
     )
     checks = [
         CheckExecution(
-            call_id=f"attempt-1:{MATH_STRUCTURE_TOOL}",
-            tool=MATH_STRUCTURE_TOOL,
+            call_id=f"attempt-1:{MATH_ITEM_SPEC_TOOL}",
+            tool=MATH_ITEM_SPEC_TOOL,
             advisory=False,
             requested_arguments={},
             evidence=_evidence(
-                MATH_STRUCTURE_TOOL,
+                MATH_ITEM_SPEC_TOOL,
                 "passed",
-                combinations=8,
-                distractors=len(candidate.distractors),
+                combinations_checked=combinations,
+                max_combinations=combinations,
+                seed=0,
             ),
         ),
         CheckExecution(
-            call_id=f"attempt-1:{MATH_ANSWERS_TOOL}",
-            tool=MATH_ANSWERS_TOOL,
+            call_id=f"attempt-1:{MATH_OPTIONS_TOOL}",
+            tool=MATH_OPTIONS_TOOL,
             advisory=False,
             requested_arguments={},
             evidence=_evidence(
-                MATH_ANSWERS_TOOL,
+                MATH_OPTIONS_TOOL,
                 "passed",
-                checking_mode="exhaustive_domain",
-                combinations_checked=8,
-                max_combinations=8,
+                checking_mode="property_based",
+                combinations_checked=combinations,
+                max_combinations=combinations,
                 seed=0,
-                selected_distractors=[
-                    recipe.model_dump(mode="json") for recipe in candidate.distractors
-                ],
+                distractors=len(candidate.item.body.distractors),
             ),
         ),
         CheckExecution(

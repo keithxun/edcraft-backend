@@ -260,9 +260,9 @@ class ReviewTemplate(BaseModel):
 class ValidationLimits(BaseModel):
     """Check budget recorded by the AI library, whichever mode it used.
 
-    Code templates record a sampled budget; math templates record an exhaustive
-    bounded-combination budget. Fields for the other mode stay null so clients
-    can keep reading one stable response shape.
+    Code templates record a sampled budget; math templates record a bounded
+    parameter-domain sample budget. Fields for the other mode stay null so
+    clients can keep reading one stable response shape.
     """
 
     model_config = ConfigDict(extra="forbid")
