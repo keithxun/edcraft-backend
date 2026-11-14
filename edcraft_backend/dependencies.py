@@ -50,7 +50,6 @@ from edcraft_backend.services.assessment_template_service import (
     AssessmentTemplateService,
 )
 from edcraft_backend.services.auth_service import AuthService
-from edcraft_backend.services.check_pilot_service import CheckPilotService
 from edcraft_backend.services.collaboration_service import CollaborationService
 from edcraft_backend.services.email_service import EmailService
 from edcraft_backend.services.folder_service import FolderService
@@ -462,22 +461,10 @@ JobServiceDep = Annotated[JobService, Depends(get_job_service)]
 @lru_cache
 def get_ai_authoring_service() -> AiAuthoringService:
     """Get the process-wide file-backed AI authoring service."""
-    return AiAuthoringService(settings.authoring, check_pilot=settings.check_pilot)
+    return AiAuthoringService(settings.authoring)
 
 
 AiAuthoringServiceDep = Annotated[AiAuthoringService, Depends(get_ai_authoring_service)]
-
-
-@lru_cache
-def get_check_pilot_service() -> CheckPilotService:
-    """Get the process-wide check-pilot integration service."""
-    return CheckPilotService(
-        authoring=settings.authoring,
-        settings=settings.check_pilot,
-    )
-
-
-CheckPilotServiceDep = Annotated[CheckPilotService, Depends(get_check_pilot_service)]
 
 
 def get_provider_connection_repository(

@@ -16,7 +16,6 @@ from edcraft_backend.routers import (
     assessment_templates,
     assessments,
     auth,
-    check_pilot,
     collaborators,
     folders,
     input_generator,
@@ -87,7 +86,6 @@ app.include_router(input_generator.router)
 app.include_router(question_generation.router)
 app.include_router(jobs.router)
 app.include_router(ai_authoring.router)
-app.include_router(check_pilot.router)
 app.include_router(provider_connections.router)
 app.include_router(users.router)
 app.include_router(auth.router)
