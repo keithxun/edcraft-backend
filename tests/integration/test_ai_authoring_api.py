@@ -903,7 +903,9 @@ async def test_admission_is_bounded_and_progress_is_running_only(
         assert await asyncio.to_thread(started.wait, 2)
         running = (await env.client.get(f"/ai-authoring/jobs/{first}")).json()
         assert running["state"] == "running"
-        assert running["progress"] == {"phase": "generating", "attempt": 1}
+        progress = running["progress"]
+        # The fake runner reports only phase and attempt. The other fields stay empty.
+        assert (progress["phase"], progress["attempt"]) == ("generating", 1)
 
         second = await submit(env)
         assert (await env.client.get(f"/ai-authoring/jobs/{second}")).json()["state"] == "queued"

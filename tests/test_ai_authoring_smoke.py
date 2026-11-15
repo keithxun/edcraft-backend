@@ -32,11 +32,15 @@ def test_scripted_library_pipeline_checks_and_reloads_a_real_artifact() -> None:
     assert record.report.artifact.validation.examples_checked > 0
     assert record.report.artifact.validation.execution_calls > 0
     assert record.report.attempts[-1].passed is True
-    assert [item.phase for item in progress] == [
+    # Progress is reported per check, so collapse repeats to compare the phases.
+    phases = [item.phase for item in progress]
+    assert [p for i, p in enumerate(phases) if i == 0 or p != phases[i - 1]] == [
         "generating",
         "checking",
         "finalizing",
     ]
+    checking = [item for item in progress if item.phase == "checking"]
+    assert checking[-1].checks_done == checking[-1].checks_total
 
     reloaded = ValidatedCodeTemplate.model_validate_json(record.report.artifact.model_dump_json())
     first = generate(reloaded, 11)

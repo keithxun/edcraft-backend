@@ -25,7 +25,7 @@ dependencies = [
 
 [tool.uv.sources]
 edcraft-engine = { git = "https://github.com/edcraft-org/edcraft-engine.git" }
-edcraft-validator = { git = "https://github.com/edcraft-org/ai.git", rev = "09d17a247727ab3424eb728a3ec6d16c6ccdc3e3" }
+edcraft-validator = { git = "https://github.com/edcraft-org/ai.git", rev = "2d3ccefc0dfe94ffac49871ebc1307b62b524f10" }
 step-tracer = { git = "https://github.com/edcraft-org/step-tracer.git", rev = "ab7e22ef18b776a9cbd5260bef4b4eeacc17db11" }
 
 [tool.uv]
