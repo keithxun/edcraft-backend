@@ -13,17 +13,17 @@ from edcraft_validator.application.authoring_contracts import (
     DifficultyOutcome,
     RelevanceOutcome,
 )
-from edcraft_validator.domains.code.code_types import (
+from edcraft_validator.domain_types import (
     DEFAULT_DISTRACTORS,
     MAX_DISTRACTORS,
     MIN_DISTRACTORS,
+    Difficulty,
 )
 from edcraft_validator.domains.domain_registry import available_domains
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from edcraft_backend.schemas.provider_connection import ProviderConnectionResponse
 
-Difficulty = Literal["easy", "medium", "hard"]
 MAX_SEED = 2_147_483_647
 StrictSeed = Annotated[int, Field(strict=True, ge=0, le=MAX_SEED)]
 StrictQuantity = Annotated[int, Field(strict=True, ge=1, le=50)]

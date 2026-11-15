@@ -16,7 +16,7 @@ from edcraft_validator.application.authoring_contracts import (
 )
 from edcraft_validator.application.template_workflow import TemplateApplication
 from edcraft_validator.artifact_contracts import ValidatedTemplateArtifact
-from edcraft_validator.domains.code.code_types import (
+from edcraft_validator.domain_types import (
     DEFAULT_DISTRACTORS,
     MAX_DISTRACTORS,
     MIN_DISTRACTORS,
