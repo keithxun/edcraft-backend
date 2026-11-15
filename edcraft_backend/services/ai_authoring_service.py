@@ -80,7 +80,7 @@ ApprovalView = StoredReviewerApproval
 logger = logging.getLogger(__name__)
 
 # Must match [tool.uv.sources].edcraft-validator.rev in pyproject.toml.
-LIBRARY_REVISION = "2d3ccefc0dfe94ffac49871ebc1307b62b524f10"
+LIBRARY_REVISION = "ae624f219738ba6229dfea5745745b3a4df4d943"
 MAX_FINDING_TEXT = 2_000
 
 
@@ -420,6 +420,7 @@ class AiAuthoringService:
             result=job.result,
             error=job.error,
             created_at=job.created_at,
+            started_at=job.started_at,
             approval=self._approval_view(job.approval),
             last_generation=job.last_generation,
         )
@@ -431,6 +432,7 @@ class AiAuthoringService:
             state=job.state,
             result_status=job.result.status if job.result is not None else None,
             created_at=job.created_at,
+            started_at=job.started_at,
             prompt_preview=_truncate(job.request.prompt, 160),
             difficulty=job.request.difficulty,
             approval=self._approval_view(job.approval),

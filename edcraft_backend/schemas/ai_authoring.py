@@ -174,6 +174,7 @@ class AuthoringJobStatusResponse(BaseModel):
     result: AuthoringSummary | None = None
     error: PublicAuthoringError | None = None
     created_at: datetime
+    started_at: datetime | None = None
     approval: StoredReviewerApproval | None = None
     last_generation: GenerationMetadata | None = None
 
@@ -186,6 +187,7 @@ class AuthoringJobSummary(BaseModel):
     state: Literal["queued", "running", "completed", "failed"]
     result_status: Literal["checked", "needs_review", "error"] | None = None
     created_at: datetime
+    started_at: datetime | None = None
     prompt_preview: str
     difficulty: Difficulty
     approval: StoredReviewerApproval | None = None
