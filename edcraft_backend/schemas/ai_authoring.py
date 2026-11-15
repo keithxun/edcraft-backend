@@ -250,11 +250,11 @@ class ReviewTemplate(BaseModel):
 
 
 class ValidationLimits(BaseModel):
-    """Check budget recorded by the AI library, whichever mode it used.
+    """Check coverage recorded by the AI library for a checked template.
 
-    Code templates record a sampled budget; math templates record a bounded
-    parameter-domain sample budget. Fields for the other mode stay null so
-    clients can keep reading one stable response shape.
+    Both domains share one property-check shape: the sampled execution budget
+    plus whether the declared domain was enumerated completely. Only
+    ``declared_domain_size`` is meaningful for domains with a finite domain.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -266,9 +266,9 @@ class ValidationLimits(BaseModel):
     max_examples: int | None = None
     max_execution_calls: int | None = None
     timeout_seconds: float | None = None
-    combinations_checked: int | None = None
-    max_combinations: int | None = None
     seed: int
+    whole_domain: bool | None = None
+    declared_domain_size: int | None = None
 
 
 class AuthoringReviewResponse(BaseModel):

@@ -83,7 +83,7 @@ class AuthoringRequestRecord(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    domain: str = "code"
+    domain: str
     prompt: str
     difficulty: Difficulty
     num_distractors: DistractorCount = DEFAULT_DISTRACTORS

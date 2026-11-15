@@ -383,7 +383,9 @@ async def test_real_scripted_math_pipeline_round_trips_through_api(
         }
         assert len(candidate["item"]["body"]["distractors"]) == 3
         assert envelope["validation_limits"]["checking_mode"] == "property_based"
-        assert envelope["validation_limits"]["combinations_checked"] == 12
+        assert envelope["validation_limits"]["examples_checked"] == 12
+        assert envelope["validation_limits"]["whole_domain"] is True
+        assert envelope["validation_limits"]["declared_domain_size"] == 12
         assert [check["status"] for check in envelope["checks"]] == ["passed"] * 4
         assert [check["advisory"] for check in envelope["checks"]] == [
             False,
@@ -475,20 +477,19 @@ async def test_math_domain_round_trips_through_the_real_service(tmp_path: Path) 
         limits = envelope["validation_limits"]
         assert limits["validator_version"] == "mcp-math-template-v1"
         assert limits["checking_mode"] == "property_based"
-        assert limits["combinations_checked"] == 12
-        assert limits["max_combinations"] == 12
+        assert limits["examples_checked"] == 12
+        assert limits["execution_calls"] == 12
+        assert limits["max_examples"] == 100
+        assert limits["max_execution_calls"] == 400
+        assert limits["whole_domain"] is True
+        assert limits["declared_domain_size"] == 12
         assert limits["seed"] == 0
-        # The code-domain sampled budget stays absent for math.
-        assert limits["examples_checked"] is None
-        assert limits["execution_calls"] is None
-        assert limits["max_examples"] is None
-        assert limits["max_execution_calls"] is None
-        assert limits["timeout_seconds"] is None
+        assert limits["timeout_seconds"] == 15.0
 
         assert [check["tool"] for check in envelope["checks"]] == [
             "math_verify_item_spec",
             "math_validate_options",
-            "math_assess_template_difficulty",
+            "assess_template_difficulty",
             "assess_template_relevance",
         ]
         assert [check["advisory"] for check in envelope["checks"]] == [
@@ -1248,6 +1249,7 @@ async def test_restart_reconciles_only_unfinished_jobs(checked_env: AuthoringHar
                 prompt="Interrupted job",
                 difficulty="easy",
                 num_distractors=3,
+                domain="code",
                 model_profile="test-profile",
             ),
             provider="stub",

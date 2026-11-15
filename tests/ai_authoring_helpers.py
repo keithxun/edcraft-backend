@@ -48,20 +48,23 @@ from edcraft_validator.domains.math.ir.schema import (
 from edcraft_validator.domains.math.math_schemas import (
     MathQuestionInstance,
     MathTemplateCandidate,
+    MathTemplateContent,
     MathValidationSummary,
     ValidatedMathTemplate,
 )
 from edcraft_validator.domains.math.math_types import (
-    MATH_DIFFICULTY_TOOL,
     MATH_ITEM_SPEC_TOOL,
     MATH_OPTIONS_TOOL,
 )
-from edcraft_validator.domains.math.proposal_response import MathProposalResponse
+from edcraft_validator.llm.forced_decision import ClassDecision
 from edcraft_validator.llm.llm_contracts import PlannedGenerationResponse
 from edcraft_validator.mcp.client import FastMcpToolClient
 from edcraft_validator.mcp.server import create_validation_server
 from edcraft_validator.validation.check_contracts import ToolEvidence, ToolFinding
-from edcraft_validator.validation.check_names import TEMPLATE_RELEVANCE_CHECK
+from edcraft_validator.validation.check_names import (
+    TEMPLATE_DIFFICULTY_CHECK,
+    TEMPLATE_RELEVANCE_CHECK,
+)
 from edcraft_validator.validation.validation_contracts import ValidationEvidence
 from pydantic import BaseModel, ConfigDict
 
@@ -193,7 +196,7 @@ MATH_PROPOSAL_FIELDS = ("item",)
 MATH_CHECKS = (
     MATH_ITEM_SPEC_TOOL,
     MATH_OPTIONS_TOOL,
-    MATH_DIFFICULTY_TOOL,
+    TEMPLATE_DIFFICULTY_CHECK,
     TEMPLATE_RELEVANCE_CHECK,
 )
 
@@ -202,8 +205,8 @@ def proposal() -> CodeTemplateProposal:
     return CodeTemplateProposal.model_validate({key: CANDIDATE[key] for key in PROPOSAL_FIELDS})
 
 
-def math_proposal() -> MathProposalResponse:
-    return MathProposalResponse.model_validate(
+def math_proposal() -> MathTemplateContent:
+    return MathTemplateContent.model_validate(
         {key: MATH_CANDIDATE[key] for key in MATH_PROPOSAL_FIELDS}
     )
 
@@ -258,9 +261,33 @@ class StubDomain:
     validated_model = StubValidatedTemplate
     question_model = StubQuestion
     template_language = None
+    capabilities = frozenset()
+
+    def register_tools(self, server: Any, dependencies: Any) -> None:
+        """Register the stub's single deterministic check."""
+
+        @server.tool(name="stub_check")
+        async def stub_check(candidate: dict[str, Any]) -> ToolEvidence:
+            return _evidence("stub_check", "passed")
 
     def review_view(self, artifact: ValidatedTemplateArtifact):
         return build_review_view(artifact, language=self.template_language)
+
+    def distractor_count(self, candidate: Any) -> int:
+        return len(StubCandidate.model_validate(candidate).choices)
+
+    def required_checks(self, candidate: Any) -> frozenset[str]:
+        return frozenset({"stub_check"})
+
+    def finalize_checked_template(
+        self,
+        candidate: Any,
+        evidence: list[ToolEvidence],
+        *,
+        advisory_checks: frozenset[str],
+    ) -> StubValidatedTemplate:
+        template = StubCandidate.model_validate(candidate)
+        return StubValidatedTemplate(artifact_id=uuid4().hex, template=template)
 
     def generate_question(self, validated: Any, *, seed: int) -> StubQuestion:
         if not isinstance(validated, StubValidatedTemplate):
@@ -333,6 +360,27 @@ class ScriptedDecisions:
         return 1.0
 
 
+class ScriptedJudge:
+    """Deterministic difficulty judge for model-free integration tests."""
+
+    provider = "stub"
+    model = "stub-judge"
+
+    def generation_settings(self) -> dict[str, Any]:
+        return {"mode": "scripted"}
+
+    def decide(self, messages: list[dict[str, Any]], labels: tuple[str, ...]) -> ClassDecision:
+        return ClassDecision(
+            label="medium",
+            distribution={"easy": 0.05, "medium": 0.9, "hard": 0.05},
+            confidence=0.9,
+            served_model=self.model,
+        )
+
+    def generate(self, request: Any) -> Any:  # pragma: no cover - decisions stop the cascade
+        raise AssertionError("The scripted difficulty judge only answers decisions")
+
+
 def run_scripted_math_pipeline(
     command: AuthoringJobCommand,
     credentials: object | None = None,
@@ -340,7 +388,10 @@ def run_scripted_math_pipeline(
 ) -> AuthoringJobRecord:
     """Run the real math workflow with a scripted provider and real MCP checks."""
     tool_client = FastMcpToolClient(
-        create_validation_server(decision_provider_factory=lambda: ScriptedDecisions())
+        create_validation_server(
+            difficulty_provider_factory=lambda: ScriptedJudge(),
+            decision_provider_factory=lambda: ScriptedDecisions(),
+        )
     )
 
     def application_factory() -> TemplateApplication:
@@ -450,6 +501,7 @@ def make_checked_report(
         max_execution_calls=20,
         timeout_seconds=2.0,
         seed=0,
+        whole_domain=True,
         evidence=[
             ValidationEvidence(check="code_validate_answers_and_distractors", status="passed")
         ],
@@ -471,12 +523,12 @@ def make_checked_report(
     if advisory_failure:
         checks.append(
             CheckExecution(
-                call_id="attempt-1:code_assess_template_difficulty",
-                tool="code_assess_template_difficulty",
+                call_id=f"attempt-1:{TEMPLATE_DIFFICULTY_CHECK}",
+                tool=TEMPLATE_DIFFICULTY_CHECK,
                 advisory=True,
                 requested_arguments={},
                 evidence=_evidence(
-                    "code_assess_template_difficulty",
+                    TEMPLATE_DIFFICULTY_CHECK,
                     "failed",
                     advisory=True,
                     difficulty_outcome={
@@ -493,8 +545,8 @@ def make_checked_report(
     elif advisory_unavailable:
         checks.append(
             CheckExecution(
-                call_id="attempt-1:code_assess_template_difficulty",
-                tool="code_assess_template_difficulty",
+                call_id=f"attempt-1:{TEMPLATE_DIFFICULTY_CHECK}",
+                tool=TEMPLATE_DIFFICULTY_CHECK,
                 advisory=True,
                 requested_arguments={},
                 error="raw advisory transport failure",
@@ -528,38 +580,38 @@ def make_math_checked_report(command: AuthoringJobCommand) -> AuthoringResult:
     """Build a real validated math artifact with sampled review evidence."""
     candidate = MathTemplateCandidate.model_validate(MATH_CANDIDATE)
     checked_digest = template_sha256(candidate)
-    combinations = 12
+    domain_size = 12
+    property_coverage = {
+        "checking_mode": "property_based",
+        "examples_checked": domain_size,
+        "execution_calls": domain_size,
+        "max_examples": 100,
+        "max_execution_calls": 400,
+        "timeout_seconds": 15.0,
+        "seed": 0,
+        "whole_domain": True,
+    }
     validation = MathValidationSummary(
-        checking_mode="property_based",
-        combinations_checked=combinations,
-        max_combinations=combinations,
-        seed=0,
+        **property_coverage,
+        declared_domain_size=domain_size,
         evidence=[
             ValidationEvidence(
                 check=MATH_ITEM_SPEC_TOOL,
                 status="passed",
-                details={"tool_version": "1.1.0"},
+                details={"tool_version": "1.1.0", **property_coverage},
             ),
             ValidationEvidence(
                 check=MATH_OPTIONS_TOOL,
                 status="passed",
-                details={
-                    "tool_version": "1.1.0",
-                    "checking_mode": "property_based",
-                    "combinations_checked": combinations,
-                    "max_combinations": combinations,
-                    "seed": 0,
-                },
+                details={"tool_version": "1.1.0", **property_coverage},
             ),
             ValidationEvidence(
-                check=MATH_DIFFICULTY_TOOL,
+                check=TEMPLATE_DIFFICULTY_CHECK,
                 status="passed",
                 details={
                     "advisory": True,
-                    "provisional": True,
-                    "calibrated": False,
-                    "tool_version": "1.0.0",
-                    "template_sha256": checked_digest,
+                    "tool_version": "2.0.0",
+                    "subject_sha256": checked_digest,
                 },
             ),
             ValidationEvidence(
@@ -588,9 +640,8 @@ def make_math_checked_report(command: AuthoringJobCommand) -> AuthoringResult:
             evidence=_evidence(
                 MATH_ITEM_SPEC_TOOL,
                 "passed",
-                combinations_checked=combinations,
-                max_combinations=combinations,
-                seed=0,
+                declared_domain_size=domain_size,
+                **property_coverage,
             ),
         ),
         CheckExecution(
@@ -601,30 +652,26 @@ def make_math_checked_report(command: AuthoringJobCommand) -> AuthoringResult:
             evidence=_evidence(
                 MATH_OPTIONS_TOOL,
                 "passed",
-                checking_mode="property_based",
-                combinations_checked=combinations,
-                max_combinations=combinations,
-                seed=0,
                 distractors=len(candidate.item.body.distractors),
             ),
         ),
         CheckExecution(
-            call_id=f"attempt-1:{MATH_DIFFICULTY_TOOL}",
-            tool=MATH_DIFFICULTY_TOOL,
+            call_id=f"attempt-1:{TEMPLATE_DIFFICULTY_CHECK}",
+            tool=TEMPLATE_DIFFICULTY_CHECK,
             advisory=True,
             requested_arguments={},
             evidence=_evidence(
-                MATH_DIFFICULTY_TOOL,
+                TEMPLATE_DIFFICULTY_CHECK,
                 "passed",
                 advisory=True,
-                template_sha256=checked_digest,
+                subject_sha256=checked_digest,
                 difficulty_outcome={
                     "assessment_path": "decision",
-                    "requested_difficulty": "easy",
-                    "estimated_difficulty": "easy",
+                    "requested_difficulty": "medium",
+                    "estimated_difficulty": "medium",
                     "decision": "matches",
                     "status": "passed",
-                    "reason": "Provisional deterministic heuristic; not calibrated.",
+                    "reason": "Advisory estimate matches the requested difficulty.",
                 },
             ),
         ),
