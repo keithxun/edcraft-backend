@@ -33,7 +33,7 @@ from edcraft_validator.application.authoring_contracts import (
     AuthoringResult,
 )
 from edcraft_validator.artifact_contracts import ValidatedTemplateArtifact
-from edcraft_validator.domains.code.code_types import DEFAULT_DISTRACTORS
+from edcraft_validator.domain_types import DEFAULT_DISTRACTORS, Difficulty
 from edcraft_validator.domains.domain_registry import create_domain
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -83,9 +83,9 @@ class AuthoringRequestRecord(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    domain: str = "code"
+    domain: str
     prompt: str
-    difficulty: Literal["easy", "medium", "hard"]
+    difficulty: Difficulty
     num_distractors: DistractorCount = DEFAULT_DISTRACTORS
     model_profile: str | None = None
     connection_id: UUID | None = None

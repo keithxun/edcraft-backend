@@ -16,6 +16,7 @@ import pytest
 import pytest_asyncio
 from edcraft_validator.application.authoring_contracts import AuthoringProgress
 from edcraft_validator.domains.domain_registry import register_domain, unregister_domain
+from edcraft_validator.domains.math.math_schemas import MathQuestionInstance
 from httpx import ASGITransport, AsyncClient
 
 from edcraft_backend.config.settings import (
@@ -43,8 +44,10 @@ from tests.ai_authoring_helpers import (
     StaticExecutor,
     StubDomain,
     make_checked_report,
+    make_math_checked_report,
     make_needs_review_report,
     make_stub_checked_report,
+    run_scripted_math_pipeline,
     run_scripted_pipeline,
 )
 
@@ -195,7 +198,7 @@ async def test_capabilities_are_safe_and_server_configured(checked_env: Authorin
     response = await checked_env.client.get("/ai-authoring/capabilities")
     assert response.status_code == 200
     body = response.json()
-    assert body["enabled_domains"] == ["code"]
+    assert body["enabled_domains"] == ["code", "math"]
     assert body["difficulty_labels"] == ["easy", "medium", "hard"]
     assert body["model_profiles"] == [
         {
@@ -221,13 +224,13 @@ async def test_capabilities_reflect_the_domain_registry(
 ) -> None:
     registered = await checked_env.client.get("/ai-authoring/capabilities")
     assert registered.status_code == 200
-    assert registered.json()["enabled_domains"] == ["code", "stub"]
+    assert registered.json()["enabled_domains"] == ["code", "math", "stub"]
 
     unregister_domain("stub")
     try:
         missing = await checked_env.client.get("/ai-authoring/capabilities")
         assert missing.status_code == 200
-        assert missing.json()["enabled_domains"] == ["code"]
+        assert missing.json()["enabled_domains"] == ["code", "math"]
     finally:
         register_domain("stub", StubDomain)
 
@@ -243,7 +246,9 @@ async def test_review_preview_approval_and_generation_flow(checked_env: Authorin
     envelope = await review(env, job_id)
     digest = envelope["artifact_sha256"]
     assert envelope["artifact_id"] == status["result"]["artifact_id"]
+    assert envelope["domain"] == "code"
     assert envelope["request"]["prompt"] == payload()["prompt"]
+    assert envelope["template"]["language"] == "python"
     assert envelope["template"]["candidate"]["code"].startswith("def calculate")
     assert envelope["template"]["candidate"]["question_template"]
     assert envelope["template"]["candidate"]["distractors"]
@@ -352,6 +357,59 @@ async def test_real_scripted_library_pipeline_round_trips_through_api(
 
 
 @pytest.mark.asyncio
+async def test_real_scripted_math_pipeline_round_trips_through_api(
+    tmp_path: Path,
+) -> None:
+    async with env_for(tmp_path, run_scripted_math_pipeline) as env:
+        job_id = await complete_job(
+            env,
+            domain="math",
+            prompt="Create a linear equation question for x",
+            difficulty="medium",
+        )
+        envelope = await review(env, job_id)
+        assert envelope["request"]["domain"] == "math"
+        candidate = envelope["template"]["candidate"]
+        assert candidate["item"]["topic"] == "school.linear"
+        assert candidate["item"]["body"]["goal"] == {
+            "kind": "solve",
+            "symbol": "x",
+            "symbols": [],
+            "expr": None,
+            "point": None,
+            "order": 1,
+            "domain": "real",
+            "matrix": None,
+        }
+        assert len(candidate["item"]["body"]["distractors"]) == 3
+        assert envelope["validation_limits"]["checking_mode"] == "property_based"
+        assert envelope["validation_limits"]["examples_checked"] == 12
+        assert envelope["validation_limits"]["whole_domain"] is True
+        assert envelope["validation_limits"]["declared_domain_size"] == 12
+        assert [check["status"] for check in envelope["checks"]] == ["passed"] * 4
+        assert [check["advisory"] for check in envelope["checks"]] == [
+            False,
+            False,
+            True,
+            True,
+        ]
+
+        digest = envelope["artifact_sha256"]
+        assert (await approve(env, job_id, digest)).status_code == 200
+        preview = await env.client.post(f"/ai-authoring/jobs/{job_id}/preview", json={"seed": 3})
+        assert preview.status_code == 200, preview.text
+        instance = MathQuestionInstance.model_validate(preview.json()["question"])
+        assert instance.answer == instance.choices[instance.correct_index]
+        batch = await env.client.post(
+            f"/ai-authoring/jobs/{job_id}/generate",
+            json={"artifact_sha256": digest, "seed": 3, "quantity": 2},
+        )
+        assert batch.status_code == 200, batch.text
+        assert batch.json()["domain"] == "math"
+        assert [item["seed"] for item in batch.json()["questions"]] == [3, 4]
+
+
+@pytest.mark.asyncio
 async def test_stub_domain_round_trips_through_the_real_service(
     tmp_path: Path, stub_domain: Any
 ) -> None:
@@ -389,6 +447,85 @@ async def test_stub_domain_round_trips_through_the_real_service(
 
         listed = (await env.client.get("/ai-authoring/jobs")).json()
         assert listed[0]["domain"] == "stub"
+
+
+@pytest.mark.asyncio
+async def test_math_domain_round_trips_through_the_real_service(tmp_path: Path) -> None:
+    async with env_for(tmp_path, StaticExecutor(make_math_checked_report)) as env:
+        job_id = await complete_job(env, domain="math", difficulty="medium")
+        status = (await env.client.get(f"/ai-authoring/jobs/{job_id}")).json()
+        assert status["result"]["domain"] == "math"
+        assert status["result"]["status"] == "checked"
+
+        listed = (await env.client.get("/ai-authoring/jobs")).json()
+        assert listed[0]["domain"] == "math"
+
+        envelope = await review(env, job_id)
+        assert envelope["domain"] == "math"
+        assert envelope["request"]["domain"] == "math"
+        assert envelope["template"]["template_id"] == "math.medium.linear_equation"
+        assert envelope["template"]["language"] is None
+        candidate = envelope["template"]["candidate"]
+        assert candidate["item"]["topic"] == "school.linear"
+        assert candidate["item"]["parameters"] == [
+            {"name": "a", "values": ["2", "3", "5"]},
+            {"name": "b", "values": ["1", "4"]},
+            {"name": "c", "values": ["7", "10"]},
+        ]
+        assert len(candidate["item"]["body"]["distractors"]) == 3
+
+        limits = envelope["validation_limits"]
+        assert limits["validator_version"] == "mcp-math-template-v1"
+        assert limits["checking_mode"] == "property_based"
+        assert limits["examples_checked"] == 12
+        assert limits["execution_calls"] == 12
+        assert limits["max_examples"] == 100
+        assert limits["max_execution_calls"] == 400
+        assert limits["whole_domain"] is True
+        assert limits["declared_domain_size"] == 12
+        assert limits["seed"] == 0
+        assert limits["timeout_seconds"] == 15.0
+
+        assert [check["tool"] for check in envelope["checks"]] == [
+            "math_verify_item_spec",
+            "math_validate_options",
+            "assess_template_difficulty",
+            "assess_template_relevance",
+        ]
+        assert [check["advisory"] for check in envelope["checks"]] == [
+            False,
+            False,
+            True,
+            True,
+        ]
+        digest = envelope["artifact_sha256"]
+
+        assert (await approve(env, job_id, "0" * 64)).status_code == 409
+
+        preview = await env.client.post(f"/ai-authoring/jobs/{job_id}/preview", json={"seed": 7})
+        assert preview.status_code == 200, preview.text
+        assert preview.json()["domain"] == "math"
+        question = MathQuestionInstance.model_validate(preview.json()["question"])
+        assert question.template_id == "math.medium.linear_equation"
+        assert question.seed == 7
+        assert set(question.parameters) == {"a", "b", "c"}
+        assert question.answer == question.choices[question.correct_index]
+        assert len(question.choices) == len(set(question.choices))
+        assert question.requires_manual_review is True
+
+        assert (await approve(env, job_id, digest)).status_code == 200
+        generated = await env.client.post(
+            f"/ai-authoring/jobs/{job_id}/generate",
+            json={"artifact_sha256": digest, "seed": 5, "quantity": 3},
+        )
+        assert generated.status_code == 200, generated.text
+        batch = generated.json()
+        assert batch["domain"] == "math"
+        assert [item["seed"] for item in batch["questions"]] == [5, 6, 7]
+        for item in batch["questions"]:
+            instance = MathQuestionInstance.model_validate(item)
+            assert instance.answer == instance.choices[instance.correct_index]
+            assert len(instance.choices) == len(set(instance.choices))
 
 
 @pytest.mark.asyncio
@@ -766,7 +903,15 @@ async def test_admission_is_bounded_and_progress_is_running_only(
         assert await asyncio.to_thread(started.wait, 2)
         running = (await env.client.get(f"/ai-authoring/jobs/{first}")).json()
         assert running["state"] == "running"
-        assert running["progress"] == {"phase": "generating", "attempt": 1}
+        assert running["started_at"] is not None
+        assert datetime.fromisoformat(running["started_at"]) <= datetime.now(UTC)
+        progress = running["progress"]
+        assert (progress["phase"], progress["attempt"]) == ("generating", 1)
+        assert progress["checks_total"] is None
+        assert progress["checks_done"] is None
+        assert progress["current_check"] is None
+        assert progress["max_attempts"] is None
+        assert progress["phase_started_at"] is None
 
         second = await submit(env)
         assert (await env.client.get(f"/ai-authoring/jobs/{second}")).json()["state"] == "queued"
@@ -1112,6 +1257,7 @@ async def test_restart_reconciles_only_unfinished_jobs(checked_env: AuthoringHar
                 prompt="Interrupted job",
                 difficulty="easy",
                 num_distractors=3,
+                domain="code",
                 model_profile="test-profile",
             ),
             provider="stub",

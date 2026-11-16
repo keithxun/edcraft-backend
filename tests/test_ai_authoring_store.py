@@ -44,6 +44,7 @@ def _job(owner_id, job_id, prompt="Create a tracing question") -> StoredJob:
             prompt=prompt,
             difficulty="easy",
             num_distractors=3,
+            domain="code",
             model_profile="test-profile",
         ),
         provider="stub",
@@ -113,9 +114,7 @@ def test_checked_report_stores_exact_artifact_and_report(tmp_path) -> None:
     assert completed.artifact_id == report.artifact.artifact_id
     artifact_bytes = store.read_artifact(job.job_id)
     assert artifact_bytes == report.artifact.model_dump_json().encode()
-    assert store.read_report(job.job_id).provider_settings == {
-        "api_key": "never-return-this"
-    }
+    assert store.read_report(job.job_id).provider_settings == {"api_key": "never-return-this"}
 
 
 def test_reconcile_marks_running_jobs_failed_and_preserves_approval(tmp_path) -> None:
@@ -126,9 +125,7 @@ def test_reconcile_marks_running_jobs_failed_and_preserves_approval(tmp_path) ->
     completed_job = _job(owner, completed_command.job_id)
     store.create_job(completed_job)
     store.mark_started(completed_job.job_id)
-    completed = store.complete_job(
-        completed_job.job_id, make_checked_report(completed_command)
-    )
+    completed = store.complete_job(completed_job.job_id, make_checked_report(completed_command))
     approval = ApprovalRecord(
         decision="approved",
         artifact_sha256=completed.artifact_sha256 or "",
@@ -234,9 +231,7 @@ def test_save_approval_and_generation_reject_changed_artifact(
     digest = completed.artifact_sha256 or ""
     store.save_approval(job.job_id, _approval(digest, owner))
 
-    artifact_path = (
-        store.root / "artifacts" / str(job.job_id) / "artifact.json"
-    )
+    artifact_path = store.root / "artifacts" / str(job.job_id) / "artifact.json"
     artifact_path.write_bytes(b'{"tampered":true}')
 
     with pytest.raises(AuthoringConflict, match="integrity"):
@@ -329,9 +324,7 @@ def test_read_evidence_requires_a_current_approval_for_generation(
         )
 
     # A rejected decision is still durable review evidence for the review view.
-    assert (
-        store.read_evidence(job.job_id, owner_id=owner).approval.decision == "rejected"
-    )
+    assert store.read_evidence(job.job_id, owner_id=owner).approval.decision == "rejected"
 
 
 def test_read_evidence_accepts_an_equivalent_reserialized_artifact(

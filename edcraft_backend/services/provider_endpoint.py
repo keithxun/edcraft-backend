@@ -71,6 +71,13 @@ class ResolvedConnection:
         )
 
     @classmethod
+    def for_judge(cls, *, provider: str, model: str) -> ResolvedConnection:
+        """Resolve the server-configured advisory judge without a per-job secret."""
+        return cls(
+            selection=TemplateProviderSelection(provider=provider, model=model)
+        )
+
+    @classmethod
     def for_connection(
         cls,
         *,

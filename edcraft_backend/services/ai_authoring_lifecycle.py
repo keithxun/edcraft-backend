@@ -92,6 +92,7 @@ class AuthoringLifecycle:
         self._admission_lock: asyncio.Lock | None = None
         self._tasks: set[asyncio.Task[None]] = set()
         self._background_tasks: set[asyncio.Task[None]] = set()
+        self._progress_chains: dict[UUID, asyncio.Task[None]] = {}
         self._admitted = 0
         self._admitted_by_owner: dict[UUID, int] = {}
         self._shutting_down = False
@@ -120,9 +121,7 @@ class AuthoringLifecycle:
             # a second cancellation of this request must not abort scheduling
             # or leak the admission slot.
             self._schedule_background(
-                self._settle_after_cancellation(
-                    write_task, job.job_id, command, runtime, lease
-                ),
+                self._settle_after_cancellation(write_task, job.job_id, command, runtime, lease),
                 name=f"ai-authoring-settlement-{job.job_id}",
             )
             raise
@@ -268,16 +267,10 @@ class AuthoringLifecycle:
                     try:
                         record = await self._run_executor(job_id, command, runtime)
                         if record is not None:
-                            await asyncio.to_thread(
-                                self._store.complete_job, job_id, record.report
-                            )
+                            await asyncio.to_thread(self._store.complete_job, job_id, record.report)
                     except Exception:
-                        logger.exception(
-                            "AI authoring job failed", extra={"job_id": str(job_id)}
-                        )
-                        await asyncio.to_thread(
-                            self._store.fail_job, job_id, _EXECUTION_FAILED
-                        )
+                        logger.exception("AI authoring job failed", extra={"job_id": str(job_id)})
+                        await asyncio.to_thread(self._store.fail_job, job_id, _EXECUTION_FAILED)
         except Exception:
             logger.exception("AI authoring runner failed", extra={"job_id": str(job_id)})
             await asyncio.to_thread(self._store.fail_job, job_id, _START_FAILED)
@@ -347,11 +340,38 @@ class AuthoringLifecycle:
         return publish
 
     def _schedule_progress(self, job_id: UUID, progress: AuthoringProgress) -> None:
+        """Queue one progress write behind the previous write for that job.
+
+        Updates arrive from the executor thread in the order they were made, yet
+        each used to be written by its own thread, so a slow earlier write could
+        land after a later one. Chaining keeps the stored progress equal to the
+        newest update received rather than the one that finished last.
+        """
+        previous = self._progress_chains.get(job_id)
         task = asyncio.create_task(
-            asyncio.to_thread(self._store.update_progress, job_id, progress)
+            self._write_progress(job_id, progress, previous),
+            name=f"ai-authoring-progress-{job_id}",
         )
+        self._progress_chains[job_id] = task
         self._background_tasks.add(task)
-        task.add_done_callback(self._background_tasks.discard)
+        task.add_done_callback(lambda finished: self._settle_progress_write(job_id, finished))
+
+    async def _write_progress(
+        self,
+        job_id: UUID,
+        progress: AuthoringProgress,
+        previous: asyncio.Task[None] | None,
+    ) -> None:
+        """Persist one progress update once the one before it has finished."""
+        if previous is not None:
+            await asyncio.gather(previous, return_exceptions=True)
+        await asyncio.to_thread(self._store.update_progress, job_id, progress)
+
+    def _settle_progress_write(self, job_id: UUID, task: asyncio.Task[None]) -> None:
+        """Forget a finished write so idle waits and the chain stay accurate."""
+        self._background_tasks.discard(task)
+        if self._progress_chains.get(job_id) is task:
+            del self._progress_chains[job_id]
 
     def _ensure_loop_state(self) -> None:
         loop = asyncio.get_running_loop()
@@ -363,6 +383,7 @@ class AuthoringLifecycle:
         self._admission_lock = asyncio.Lock()
         self._tasks = set()
         self._background_tasks = set()
+        self._progress_chains = {}
         self._admitted = 0
         self._admitted_by_owner = {}
 

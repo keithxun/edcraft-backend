@@ -13,17 +13,17 @@ from edcraft_validator.application.authoring_contracts import (
     DifficultyOutcome,
     RelevanceOutcome,
 )
-from edcraft_validator.domains.code.code_types import (
+from edcraft_validator.domain_types import (
     DEFAULT_DISTRACTORS,
     MAX_DISTRACTORS,
     MIN_DISTRACTORS,
+    Difficulty,
 )
 from edcraft_validator.domains.domain_registry import available_domains
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from edcraft_backend.schemas.provider_connection import ProviderConnectionResponse
 
-Difficulty = Literal["easy", "medium", "hard"]
 MAX_SEED = 2_147_483_647
 StrictSeed = Annotated[int, Field(strict=True, ge=0, le=MAX_SEED)]
 StrictQuantity = Annotated[int, Field(strict=True, ge=1, le=50)]
@@ -174,6 +174,7 @@ class AuthoringJobStatusResponse(BaseModel):
     result: AuthoringSummary | None = None
     error: PublicAuthoringError | None = None
     created_at: datetime
+    started_at: datetime | None = None
     approval: StoredReviewerApproval | None = None
     last_generation: GenerationMetadata | None = None
 
@@ -186,6 +187,7 @@ class AuthoringJobSummary(BaseModel):
     state: Literal["queued", "running", "completed", "failed"]
     result_status: Literal["checked", "needs_review", "error"] | None = None
     created_at: datetime
+    started_at: datetime | None = None
     prompt_preview: str
     difficulty: Difficulty
     approval: StoredReviewerApproval | None = None
@@ -250,18 +252,25 @@ class ReviewTemplate(BaseModel):
 
 
 class ValidationLimits(BaseModel):
-    """Sampled-check budget recorded by the AI library."""
+    """Check coverage recorded by the AI library for a checked template.
+
+    Both domains share one property-check shape: the sampled execution budget
+    plus whether the declared domain was enumerated completely. Only
+    ``declared_domain_size`` is meaningful for domains with a finite domain.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     validator_version: str
     checking_mode: str
-    examples_checked: int
-    execution_calls: int
-    max_examples: int
-    max_execution_calls: int
-    timeout_seconds: float
+    examples_checked: int | None = None
+    execution_calls: int | None = None
+    max_examples: int | None = None
+    max_execution_calls: int | None = None
+    timeout_seconds: float | None = None
     seed: int
+    whole_domain: bool | None = None
+    declared_domain_size: int | None = None
 
 
 class AuthoringReviewResponse(BaseModel):
@@ -269,6 +278,7 @@ class AuthoringReviewResponse(BaseModel):
 
     job_id: UUID
     state: Literal["queued", "running", "completed", "failed"]
+    domain: str
     artifact_id: str | None = None
     artifact_sha256: Sha256 | None = None
     library_revision: str

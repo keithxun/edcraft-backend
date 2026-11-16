@@ -16,17 +16,23 @@ from edcraft_validator.application.authoring_contracts import (
 )
 from edcraft_validator.application.template_workflow import TemplateApplication
 from edcraft_validator.artifact_contracts import ValidatedTemplateArtifact
-from edcraft_validator.domains.code.code_types import (
+from edcraft_validator.domain_types import (
     DEFAULT_DISTRACTORS,
     MAX_DISTRACTORS,
     MIN_DISTRACTORS,
 )
 from edcraft_validator.domains.domain_contract import DomainModule
 from edcraft_validator.domains.domain_registry import available_domains, create_domain
-from edcraft_validator.llm.judge_configuration import load_judge_settings
+from edcraft_validator.llm.judge_configuration import (
+    JudgeSettings,
+    load_judge_settings,
+)
 from pydantic import ValidationError
 
-from edcraft_backend.config.settings import AuthoringProfileSettings, AuthoringSettings
+from edcraft_backend.config.settings import (
+    AuthoringProfileSettings,
+    AuthoringSettings,
+)
 from edcraft_backend.schemas.ai_authoring import (
     ApprovalRequest,
     ApprovalResponse,
@@ -74,7 +80,7 @@ ApprovalView = StoredReviewerApproval
 logger = logging.getLogger(__name__)
 
 # Must match [tool.uv.sources].edcraft-validator.rev in pyproject.toml.
-LIBRARY_REVISION = "783c32a2b3c186f669807a97e30d2fa9b9b3b744"
+LIBRARY_REVISION = "e0bab5c80ff24d3b19ffc52f7c8be11ded8eae2e"
 MAX_FINDING_TEXT = 2_000
 
 
@@ -103,6 +109,14 @@ class AiAuthoringService:
             self.settings.shutdown_timeout_seconds if timeout is None else timeout
         )
 
+    def _configured_judge(self) -> JudgeSettings | None:
+        """Load the server-configured advisory judge, or None when invalid."""
+        try:
+            return load_judge_settings()
+        except (ValueError, ValidationError):
+            logger.warning("Configured advisory judge settings are invalid")
+            return None
+
     async def capabilities(
         self, connections: list[ProviderConnectionResponse] | None = None
     ) -> AuthoringCapabilitiesResponse:
@@ -116,17 +130,16 @@ class AiAuthoringService:
             )
             for profile in self.settings.model_profiles
         ]
-        judge: JudgeDisplay | None
-        try:
-            configured = load_judge_settings()
-            judge = JudgeDisplay(
+        configured = self._configured_judge()
+        judge = (
+            JudgeDisplay(
                 label=f"{configured.provider} · {configured.model}",
                 provider=configured.provider,
                 model=configured.model,
             )
-        except (ValueError, ValidationError):
-            logger.warning("Configured advisory judge settings are invalid")
-            judge = None
+            if configured is not None
+            else None
+        )
         return AuthoringCapabilitiesResponse(
             enabled_domains=list(available_domains()),
             difficulty_labels=["easy", "medium", "hard"],
@@ -151,6 +164,15 @@ class AiAuthoringService:
     ) -> StoredJob:
         """Admit and persist one queued authoring job."""
         domain_request = _domain_request(request)
+        configured_judge = self._configured_judge()
+        judge_default = (
+            ResolvedConnection.for_judge(
+                provider=configured_judge.provider,
+                model=configured_judge.model,
+            )
+            if configured_judge is not None
+            else None
+        )
         runtime = JobRuntime.prepare(
             request,
             profile_lookup=self._profile,
@@ -158,6 +180,7 @@ class AiAuthoringService:
             author_connection=author_connection,
             difficulty_connection=difficulty_connection,
             relevance_connection=relevance_connection,
+            judge_default=judge_default,
         )
         author = runtime.author
         provider = author.selection.provider
@@ -233,12 +256,22 @@ class AiAuthoringService:
         ]
         checks = attempts[-1].checks if attempts else []
         candidate = attempts[-1].candidate if attempts else None
-        template = _template_view(artifact)
-        limits = _limits(artifact) if artifact is not None else None
+        review = domain.review_view(artifact) if artifact is not None else None
+        template = (
+            ReviewTemplate(
+                template_id=review.template_id,
+                candidate=review.candidate,
+                language=review.language,
+            )
+            if review is not None
+            else None
+        )
+        limits = _limits(review.limits) if review is not None else None
         summary = job.result
         return AuthoringReviewResponse(
             job_id=job.job_id,
             state=job.state,
+            domain=job.request.domain,
             artifact_id=job.artifact_id,
             artifact_sha256=job.artifact_sha256,
             library_revision=job.library_revision,
@@ -387,6 +420,7 @@ class AiAuthoringService:
             result=job.result,
             error=job.error,
             created_at=job.created_at,
+            started_at=job.started_at,
             approval=self._approval_view(job.approval),
             last_generation=job.last_generation,
         )
@@ -398,6 +432,7 @@ class AiAuthoringService:
             state=job.state,
             result_status=job.result.status if job.result is not None else None,
             created_at=job.created_at,
+            started_at=job.started_at,
             prompt_preview=_truncate(job.request.prompt, 160),
             difficulty=job.request.difficulty,
             approval=self._approval_view(job.approval),
@@ -507,7 +542,9 @@ def _validated_artifact(domain: DomainModule, artifact_bytes: bytes) -> Validate
         raise AuthoringConflict("The stored artifact is not usable.") from exc
 
 
-def _template_view(artifact: ValidatedTemplateArtifact | None) -> ReviewTemplate | None:
+def _template_view(
+    artifact: ValidatedTemplateArtifact | None, domain: DomainModule
+) -> ReviewTemplate | None:
     if artifact is None:
         return None
     template = getattr(artifact, "template", None)
@@ -518,23 +555,38 @@ def _template_view(artifact: ValidatedTemplateArtifact | None) -> ReviewTemplate
     return ReviewTemplate(
         template_id=template_id,
         candidate=candidate,
-        language=getattr(template, "language", None),
+        language=_template_language(domain),
     )
 
 
-def _limits(artifact: ValidatedTemplateArtifact) -> ValidationLimits | None:
-    validation = getattr(artifact, "validation", None)
-    if validation is None:
+def _template_language(domain: DomainModule) -> str | None:
+    """Read the optional review label without requiring it from older domains."""
+    field = "template_language"
+    return getattr(domain, field, None)
+
+
+_LIMIT_FIELDS = (
+    "examples_checked",
+    "execution_calls",
+    "max_examples",
+    "max_execution_calls",
+    "timeout_seconds",
+    "whole_domain",
+    "declared_domain_size",
+)
+
+
+def _limits(recorded: dict[str, Any] | None) -> ValidationLimits | None:
+    """Project the domain-owned validation summary into the response shape."""
+    if recorded is None:
+        return None
+    if not {"validator_version", "checking_mode", "seed"} <= recorded.keys():
         return None
     return ValidationLimits(
-        validator_version=validation.validator_version,
-        checking_mode=validation.checking_mode,
-        examples_checked=validation.examples_checked,
-        execution_calls=validation.execution_calls,
-        max_examples=validation.max_examples,
-        max_execution_calls=validation.max_execution_calls,
-        timeout_seconds=validation.timeout_seconds,
-        seed=validation.seed,
+        validator_version=recorded["validator_version"],
+        checking_mode=recorded["checking_mode"],
+        seed=recorded["seed"],
+        **{field: recorded.get(field) for field in _LIMIT_FIELDS},
     )
 
 
