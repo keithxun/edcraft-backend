@@ -22,7 +22,7 @@ from edcraft_validator.domain_types import (
     MIN_DISTRACTORS,
 )
 from edcraft_validator.domains.domain_contract import DomainModule
-from edcraft_validator.domains.domain_registry import available_domains, create_domain
+from edcraft_validator.domains.domain_registry import create_domain
 from edcraft_validator.llm.judge_configuration import (
     JudgeSettings,
     load_judge_settings,
@@ -73,6 +73,7 @@ from edcraft_backend.services.ai_authoring_store import (
     EvidenceRequirement,
     StoredJob,
 )
+from edcraft_backend.services.ai_domains import enabled_domains
 from edcraft_backend.services.provider_endpoint import ResolvedConnection
 
 ApprovalView = StoredReviewerApproval
@@ -141,7 +142,7 @@ class AiAuthoringService:
             else None
         )
         return AuthoringCapabilitiesResponse(
-            enabled_domains=list(available_domains()),
+            enabled_domains=list(enabled_domains()),
             difficulty_labels=["easy", "medium", "hard"],
             model_profiles=profiles,
             # Disabled connections stay visible in settings but cannot write questions.

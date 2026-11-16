@@ -19,10 +19,10 @@ from edcraft_validator.domain_types import (
     MIN_DISTRACTORS,
     Difficulty,
 )
-from edcraft_validator.domains.domain_registry import available_domains
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from edcraft_backend.schemas.provider_connection import ProviderConnectionResponse
+from edcraft_backend.services.ai_domains import enabled_domains
 
 MAX_SEED = 2_147_483_647
 StrictSeed = Annotated[int, Field(strict=True, ge=0, le=MAX_SEED)]
@@ -125,8 +125,8 @@ class SubmitAuthoringJobRequest(AuthoringModelSelection):
     @field_validator("domain")
     @classmethod
     def require_registered_domain(cls, value: str) -> str:
-        if value not in available_domains():
-            supported = ", ".join(available_domains())
+        if value not in enabled_domains():
+            supported = ", ".join(enabled_domains())
             raise ValueError(f"Unsupported domain {value!r}; choose one of: {supported}")
         return value
 
