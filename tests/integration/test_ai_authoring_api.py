@@ -40,6 +40,7 @@ from edcraft_backend.services.ai_authoring_store import (
     AuthoringRequestRecord,
     StoredJob,
 )
+from edcraft_backend.services.ai_domains import ENABLED_DOMAINS_ENV
 from tests.ai_authoring_helpers import (
     StaticExecutor,
     StubDomain,
@@ -134,8 +135,9 @@ async def checked_env(tmp_path: Path) -> AsyncGenerator[AuthoringHarness, None]:
 
 
 @pytest.fixture
-def stub_domain() -> Any:
-    """Register an out-of-tree domain for exactly one test."""
+def stub_domain(monkeypatch: pytest.MonkeyPatch) -> Any:
+    """Register and enable an out-of-tree domain for exactly one test."""
+    monkeypatch.setenv(ENABLED_DOMAINS_ENV, "code,math,stub")
     register_domain("stub", StubDomain)
     try:
         yield "stub"
@@ -1282,3 +1284,12 @@ async def test_restart_reconciles_only_unfinished_jobs(checked_env: AuthoringHar
     assert completed["approval"]["decision"] == "approved"
     assert completed["result"]["artifact_id"] == envelope["artifact_id"]
     assert completed["approval"]["artifact_sha256"] == envelope["artifact_sha256"]
+
+
+async def test_a_registered_domain_stays_hidden_until_enabled(
+    checked_env: AuthoringHarness, stub_domain: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ENABLED_DOMAINS_ENV, "code,math")
+    response = await checked_env.client.get("/ai-authoring/capabilities")
+    assert response.status_code == 200
+    assert response.json()["enabled_domains"] == ["code", "math"]
