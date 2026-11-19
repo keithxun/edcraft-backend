@@ -201,6 +201,9 @@ async def test_capabilities_are_safe_and_server_configured(checked_env: Authorin
     assert response.status_code == 200
     body = response.json()
     assert body["enabled_domains"] == ["code", "math"]
+    for subject, required in {"math": "H2 skill 1.1.", "code": "H2 skill 1.3.preorder."}.items():
+        prompts = body["syllabus_prompts"][subject].values()
+        assert any(prompt.startswith(required) for prompt in prompts)
     assert body["difficulty_labels"] == ["easy", "medium", "hard"]
     assert body["model_profiles"] == [
         {
@@ -1293,3 +1296,57 @@ async def test_a_registered_domain_stays_hidden_until_enabled(
     response = await checked_env.client.get("/ai-authoring/capabilities")
     assert response.status_code == 200
     assert response.json()["enabled_domains"] == ["code", "math"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("subject,family,answer", [("math", "1.1", "7"), ("code", "1.2", "3")])
+async def test_h2_subject_can_review_approve_and_generate(
+    tmp_path: Path, subject: str, family: str, answer: str
+) -> None:
+    from edcraft_validator.application.authoring_api import run_authoring_job_sync
+    from edcraft_validator.application.template_workflow import TemplateApplication
+    from edcraft_validator.domains.h2.checks import CHECK_NAME
+    from edcraft_validator.mcp.client import FastMcpToolClient
+    from edcraft_validator.mcp.server import create_validation_server
+
+    class WorkedExampleAuthor:
+        provider = "stub"
+        model = "h2-worked-example"
+
+        def generate(self, request):
+            return request.response_model.model_validate(
+                {
+                    "proposal": {"family": family, "example_answer": answer},
+                    "checks": [{"name": CHECK_NAME, "arguments": {}}],
+                }
+            )
+
+    def run(command, credentials=None, on_progress=None):
+        return run_authoring_job_sync(
+            command,
+            application_factory=lambda: TemplateApplication(
+                tool_client=FastMcpToolClient(create_validation_server())
+            ),
+            provider_factory=lambda selection: WorkedExampleAuthor(),
+            on_progress=on_progress,
+        )
+
+    async with env_for(tmp_path, run) as env:
+        job_id = await complete_job(
+            env, domain=subject, prompt=f"H2 topic {family}", num_distractors=3
+        )
+        envelope = await review(env, job_id)
+        assert envelope["validation_limits"]["examples_checked"] > 0
+        candidate = envelope["template"]["candidate"]
+        assert candidate["family"] == family
+        assert candidate["sample_answer"] in candidate["sample_choices"]
+        digest = envelope["artifact_sha256"]
+        assert (await approve(env, job_id, digest)).status_code == 200
+        response = await env.client.post(
+            f"/ai-authoring/jobs/{job_id}/generate",
+            json={"artifact_sha256": digest, "quantity": 2, "seed": 37},
+        )
+        assert response.status_code == 200, response.text
+        for q in response.json()["questions"]:
+            assert len(set(q["choices"])) == 4
+            assert q["choices"][q["correct_index"]] == q["answer"]

@@ -19,6 +19,7 @@ from edcraft_validator.domain_types import (
     MIN_DISTRACTORS,
     Difficulty,
 )
+from edcraft_validator.domains.domain_support import ReviewCasePreview
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from edcraft_backend.schemas.provider_connection import ProviderConnectionResponse
@@ -63,6 +64,7 @@ class AuthoringCapabilitiesResponse(BaseModel):
     """Enabled domains and server-configured model choices."""
 
     enabled_domains: list[str]
+    syllabus_prompts: dict[str, dict[str, str]] = Field(default_factory=dict)
     difficulty_labels: list[Difficulty]
     model_profiles: list[AuthoringModelProfile]
     connections: list[ProviderConnectionResponse] = Field(default_factory=list)
@@ -248,6 +250,7 @@ class ReviewTemplate(BaseModel):
 
     template_id: str
     candidate: dict[str, Any]
+    case_previews: list[ReviewCasePreview] | None = None
     language: str | None = None
 
 

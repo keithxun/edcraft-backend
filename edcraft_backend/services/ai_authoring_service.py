@@ -22,6 +22,7 @@ from edcraft_validator.domain_types import (
     MIN_DISTRACTORS,
 )
 from edcraft_validator.domains.domain_contract import DomainModule
+from edcraft_validator.domains.domain_modes import for_artifact, load_artifact
 from edcraft_validator.domains.domain_registry import create_domain
 from edcraft_validator.llm.judge_configuration import (
     JudgeSettings,
@@ -81,7 +82,7 @@ ApprovalView = StoredReviewerApproval
 logger = logging.getLogger(__name__)
 
 # Must match [tool.uv.sources].edcraft-validator.rev in pyproject.toml.
-LIBRARY_REVISION = "e0bab5c80ff24d3b19ffc52f7c8be11ded8eae2e"
+LIBRARY_REVISION = "b34ef845519533c810d3ea58c0643e8544c16442"
 MAX_FINDING_TEXT = 2_000
 
 
@@ -141,8 +142,15 @@ class AiAuthoringService:
             if configured is not None
             else None
         )
+        domains = enabled_domains()
+        syllabus_prompts = {}
+        for name in domains:
+            prompts = getattr(create_domain(name), "syllabus_prompts", None)
+            if prompts:
+                syllabus_prompts[name] = prompts()
         return AuthoringCapabilitiesResponse(
-            enabled_domains=list(enabled_domains()),
+            enabled_domains=list(domains),
+            syllabus_prompts=syllabus_prompts,
             difficulty_labels=["easy", "medium", "hard"],
             model_profiles=profiles,
             # Disabled connections stay visible in settings but cannot write questions.
@@ -257,11 +265,14 @@ class AiAuthoringService:
         ]
         checks = attempts[-1].checks if attempts else []
         candidate = attempts[-1].candidate if attempts else None
-        review = domain.review_view(artifact) if artifact is not None else None
+        review = (
+            for_artifact(domain, artifact).review_view(artifact) if artifact is not None else None
+        )
         template = (
             ReviewTemplate(
                 template_id=review.template_id,
                 candidate=review.candidate,
+                case_previews=review.case_previews,
                 language=review.language,
             )
             if review is not None
@@ -449,6 +460,7 @@ class AiAuthoringService:
     def _generate_raw(
         artifact: ValidatedTemplateArtifact, domain: DomainModule, seed: int
     ) -> dict[str, Any]:
+        domain = for_artifact(domain, artifact)
         result = TemplateApplication().generate_question(artifact, domain=domain, seed=seed)
         question = domain.question_model.model_validate(result)
         return cast(dict[str, Any], question.model_dump(mode="json"))
@@ -538,7 +550,7 @@ def _require_domain(name: str) -> DomainModule:
 
 def _validated_artifact(domain: DomainModule, artifact_bytes: bytes) -> ValidatedTemplateArtifact:
     try:
-        return domain.validated_model.model_validate_json(artifact_bytes)
+        return load_artifact(domain, artifact_bytes)
     except (ValidationError, ValueError) as exc:
         raise AuthoringConflict("The stored artifact is not usable.") from exc
 
