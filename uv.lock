@@ -560,7 +560,7 @@ requires-dist = [
     { name = "asyncpg", specifier = ">=0.31.0" },
     { name = "authlib", specifier = ">=1.3.0" },
     { name = "edcraft-engine", git = "https://github.com/edcraft-org/edcraft-engine.git" },
-    { name = "edcraft-validator", git = "file:///Users/keith/Documents/Projects/edcraft/ai?rev=d33bfb6112046357887f29f5299eab9633a39af3" },
+    { name = "edcraft-validator", git = "file:///Users/keith/Documents/Projects/edcraft/ai?rev=88fd6dbf62af0e2a927705a66ce412c025bf2597" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.125.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "itsdangerous", specifier = ">=2.2.0" },
@@ -597,7 +597,7 @@ dependencies = [
 [[package]]
 name = "edcraft-validator"
 version = "0.1.0"
-source = { git = "file:///Users/keith/Documents/Projects/edcraft/ai?rev=d33bfb6112046357887f29f5299eab9633a39af3#d33bfb6112046357887f29f5299eab9633a39af3" }
+source = { git = "file:///Users/keith/Documents/Projects/edcraft/ai?rev=88fd6dbf62af0e2a927705a66ce412c025bf2597#88fd6dbf62af0e2a927705a66ce412c025bf2597" }
 dependencies = [
     { name = "fastmcp" },
     { name = "hypothesis" },
