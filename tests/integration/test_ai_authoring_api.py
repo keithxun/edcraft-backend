@@ -1340,6 +1340,9 @@ async def test_h2_subject_can_review_approve_and_generate(
         candidate = envelope["template"]["candidate"]
         assert candidate["family"] == family
         assert candidate["sample_answer"] in candidate["sample_choices"]
+        variants = envelope["template"]["case_previews"]
+        assert {v["seed"] for v in variants} == {0, 31, 847}
+        assert all(len(v["choices"]) == 4 and v["answer"] in v["choices"] for v in variants)
         digest = envelope["artifact_sha256"]
         assert (await approve(env, job_id, digest)).status_code == 200
         response = await env.client.post(
