@@ -20,7 +20,12 @@ from edcraft_backend.services.cs1010e.functions import (
     render_square_sum,
     teaches_square_sum,
 )
-from edcraft_backend.services.cs1010e.loops import NestedLoops, UnsupportedLoop, read_loops
+from edcraft_backend.services.cs1010e.loops import (
+    CountingLoop,
+    NestedLoops,
+    UnsupportedLoop,
+    read_loops,
+)
 
 VERSION = 3
 SIZE_LIMIT = 24_000
@@ -135,8 +140,7 @@ def _recognise(exam: str) -> Match:
     )
 
 
-def _match(lecture: str, exam: str) -> Match:
-    result = _recognise(exam)
+def _check_lecture(result: Match, lecture: str) -> Match:
     lesson = " ".join(lecture.lower().split())
     if result.family == "nested-loops":
         evidence = re.search(r"nested loops?|nesting (?:a )?loop", lesson) and (
@@ -169,6 +173,65 @@ def _match(lecture: str, exam: str) -> Match:
     return result
 
 
+# Topic words describe a checked operation. A match still requires independent lecture evidence.
+_TOPIC = {
+    "nested-loops": r"\b(loop\w*|iteration\w*|repetition\w*)\b",
+    "pointer-swap": r"\b(pointer\w*|address\w*|pointee\w*|swap\w*)\b",
+    "recursive-max": r"\b(recurs\w*|midpoint|divide and conquer)\b",
+    "recursive-square-sum": r"\b(recurs\w*|midpoint|sum of squares|squared integers)\b",
+}
+
+
+FAMILIES = frozenset(_TOPIC)
+
+
+def _topic_matches(family: str, topic: str) -> bool:
+    return not topic.strip() or bool(re.search(_TOPIC[family], topic, re.IGNORECASE))
+
+
+def _lecture_tasks(lecture: str, topic: str) -> list[Match]:
+    candidates: list[Match] = []
+    if teaches_square_sum(lecture):
+        candidates.append(
+            Match(
+                "recursive-square-sum",
+                "Trace the lecture’s midpoint sum of squares and choose the printed integer.",
+            )
+        )
+    if re.search(r"\bprintf\b", lecture) and re.search(r"\b(for|while)\s*\(", lecture):
+        loop = NestedLoops(
+            CountingLoop(0, "<", 8, "+=", 1),
+            CountingLoop(0, "<", 8, "+=", 1),
+            0,
+            0,
+            1,
+            "total",
+            None,
+        )
+        candidates.append(Match("nested-loops", loop.task, loop))
+    candidates.append(Match("pointer-swap", TASKS["pointer-swap"]))
+    supported = []
+    for candidate in candidates:
+        if _topic_matches(candidate.family, topic):
+            try:
+                supported.append(_check_lecture(candidate, lecture))
+            except ValueError:
+                continue
+    return supported
+
+
+def _match(lecture: str, exam: str, topic: str, family: str | None = None) -> Match:
+    if not exam.strip():
+        for match in _lecture_tasks(lecture, topic):
+            if family is None or family == match.family:
+                return match
+        raise ValueError("No checked C practice task matches that topic and lecture evidence.")
+    match = _check_lecture(_recognise(exam), lecture)
+    if not _topic_matches(match.family, topic):
+        raise ValueError("The selected topic and the checked C exam operation differ.")
+    return match
+
+
 def _alternatives(match: Match, lecture: str) -> list[Task]:
     if match.family != "recursive-max" or not teaches_square_sum(lecture):
         return []
@@ -182,16 +245,27 @@ def _alternatives(match: Match, lecture: str) -> list[Task]:
     ]
 
 
-def propose(lecture: str, exam: str) -> Proposal:
+def propose(lecture: str, exam: str, topic: str = "") -> Proposal:
     try:
-        match = _match(lecture, exam)
+        match = _match(lecture, exam, topic)
     except ValueError as exc:
         return {"family": None, "task": "", "reason": str(exc)}
     return {
         "family": match.family,
         "task": match.task,
         "reason": "",
-        "alternatives": _alternatives(match, lecture),
+        "alternatives": (
+            _alternatives(match, lecture)
+            if exam.strip()
+            else [
+                {
+                    "family": m.family,
+                    "task": m.task,
+                    "reason": "Uses the selected lecture evidence.",
+                }
+                for m in _lecture_tasks(lecture, topic)[1:]
+            ]
+        ),
     }
 
 
@@ -210,8 +284,8 @@ def _choices(key: int, foils: list[int], rank: int, rng: Random, required: int |
     return [key, *min(groups, key=preference)]
 
 
-def generate(family: str, seed: int, lecture: str, exam: str) -> list[Question]:
-    match = _match(lecture, exam)
+def generate(family: str, seed: int, lecture: str, exam: str, topic: str = "") -> list[Question]:
+    match = _match(lecture, exam, topic, family)
     if match.family != family and family not in {
         t["family"] for t in _alternatives(match, lecture)
     }:

@@ -1,20 +1,27 @@
 """Authenticated materials-to-practice pilot endpoints."""
 
+import hashlib
+import json
 from collections.abc import AsyncGenerator
+from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from starlette.datastructures import UploadFile
 from starlette.formparsers import MultiPartException, MultiPartParser
 
 from edcraft_backend.dependencies import get_current_user
-from edcraft_backend.schemas.cs1010e_materials import (
+from edcraft_backend.schemas.materials import (
+    MaterialCollection,
     MaterialExcerpts,
     MaterialPagesResponse,
     MaterialPracticeBatch,
     MaterialPracticeRequest,
+    MaterialRetrievalRequest,
+    MaterialRetrievalResult,
     MaterialTaskProposal,
+    MaterialTopicList,
 )
-from edcraft_backend.services import cs1010e_practice, material_pdf
+from edcraft_backend.services import material_pdf, material_practice, material_retrieval
 
 router = APIRouter(prefix="/materials", dependencies=[Depends(get_current_user)])
 
@@ -74,11 +81,39 @@ async def upload_pdf_pages(request: Request) -> MaterialPagesResponse:
         await form.close()
 
 
+@router.post("/topics", response_model=MaterialTopicList)
+def list_material_topics(payload: MaterialCollection) -> MaterialTopicList:
+    """Suggest headings found in this collection of lecture pages."""
+    return MaterialTopicList(
+        topics=material_retrieval.topics(
+            [cast(material_retrieval.Page, p.model_dump()) for p in payload.pages]
+        )
+    )
+
+
+@router.post("/retrieve", response_model=MaterialRetrievalResult)
+def retrieve_material_evidence(payload: MaterialRetrievalRequest) -> MaterialRetrievalResult:
+    """Retrieve evidence from the submitted collection in a FastAPI worker thread."""
+    pages = [cast(material_retrieval.Page, p.model_dump()) for p in payload.pages]
+    selected = [(r.document, r.page) for r in payload.selected]
+    try:
+        evidence = material_retrieval.retrieve(
+            pages, payload.topic, payload.strategy, selected, payload.limit
+        )
+    except material_retrieval.SemanticRetrievalUnavailable as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+    return MaterialRetrievalResult.model_validate(
+        {"evidence": evidence, "topics": material_retrieval.topics(pages)}
+    )
+
+
 @router.post("/propose", response_model=MaterialTaskProposal)
 def propose_material_task(payload: MaterialExcerpts) -> MaterialTaskProposal:
-    """Identify the supported practice task evidenced by both excerpts."""
+    """Identify a checked task from the reviewed lecture evidence and optional exam."""
     return MaterialTaskProposal.model_validate(
-        cs1010e_practice.propose(payload.lecture, payload.exam)
+        material_practice.propose(payload.lecture, payload.exam, payload.topic)
     )
 
 
@@ -86,18 +121,28 @@ def propose_material_task(payload: MaterialExcerpts) -> MaterialTaskProposal:
 def generate_material_practice(payload: MaterialPracticeRequest) -> MaterialPracticeBatch:
     """Recheck the excerpts and generate a reproducible batch for the chosen task."""
     try:
-        questions = cs1010e_practice.generate(
-            payload.family, payload.seed, payload.lecture, payload.exam
+        questions, version = material_practice.generate(
+            payload.family, payload.seed, payload.lecture, payload.exam, payload.topic
         )
     except ValueError as exc:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
-            "Choose a task supported by the current lecture and exam excerpts.",
+            "Choose a task supported by the current topic and reviewed evidence.",
         ) from exc
+    # Hash the exact reviewed input. Page references describe the user's selection;
+    # corrections and supplied source labels are part of this receipt.
+    snapshot = json.dumps(
+        payload.model_dump(exclude={"seed"}),
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
     return MaterialPracticeBatch.model_validate(
         {
             "questions": questions,
             "seed": payload.seed,
-            "generator_version": cs1010e_practice.VERSION,
+            "generator_version": version,
+            "sources": payload.sources,
+            "input_sha256": hashlib.sha256(snapshot.encode()).hexdigest(),
         }
     )

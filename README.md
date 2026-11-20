@@ -32,6 +32,24 @@ PDF uploads in the materials-to-practice pilot require Poppler's `pdftotext` on 
 Install `poppler` with Homebrew or `poppler-utils` on Debian or Ubuntu. The backend Docker
 image includes it.
 
+Fetch the pinned CPU model once to enable semantic topic retrieval.
+
+```bash
+uv run python -m edcraft_backend.services.material_embeddings
+```
+
+This downloads about 24 MB and verifies the asset checksums.
+[MiniLM model files](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/tree/826711e54e001c83835913827a843d8dd0a1def9)
+
+By default setup writes to
+`.data/material-embedding`. Set `EDCRAFT_MATERIAL_EMBEDDING_DIR` for both setup and the
+running backend to use a different directory, such as a mounted volume. Each backend
+process runs one semantic search at a time with two ONNX CPU threads and caches up to
+1,024 page hashes and their passage vectors in RAM. The first search loads the model and
+encodes each page. A restart clears the cache. For long pages, the ranker samples up to
+eight passages across the page and uses the highest cosine similarity to the topic.
+Selected-page and keyword retrieval work before the model is installed.
+
 ### 2. Setup environment
 
 ```bash

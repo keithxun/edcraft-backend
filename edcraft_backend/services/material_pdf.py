@@ -10,7 +10,7 @@ from fastapi import status
 from edcraft_backend.exceptions import EdCraftBaseException
 
 MAX_PDF_BYTES = 10 * 1024 * 1024
-MAX_PDF_PAGES = 100
+MAX_PDF_PAGES = 300
 MAX_EXTRACTED_BYTES = 2 * 1024 * 1024
 EXTRACTION_TIMEOUT_SECONDS = 10
 

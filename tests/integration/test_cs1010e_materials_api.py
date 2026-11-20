@@ -225,3 +225,133 @@ async def test_json_materials_endpoints_require_authentication(action: str) -> N
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post(f"{MATERIALS_URL}/{action}", json=payload)
     assert response.status_code == 401, response.text
+
+
+async def test_generic_retrieval_respects_selected_pages_and_collection(
+    materials_client: AsyncClient,
+):
+    pages = [
+        {"document": "Week 1", "page": 1, "text": "Nested loops\nBody of the lecture."},
+        {"document": "Week 2", "page": 1, "text": "Partial derivatives\nA second topic."},
+    ]
+    body = {
+        "pages": pages,
+        "topic": "partial derivatives",
+        "strategy": "selected",
+        "selected": [{"document": "Week 1", "page": 1}],
+        "limit": 1,
+    }
+    explicit = await materials_client.post(f"{MATERIALS_URL}/retrieve", json=body)
+    assert explicit.status_code == 200
+    assert explicit.json()["evidence"][0]["text"] == pages[0]["text"]
+    ranked = await materials_client.post(
+        f"{MATERIALS_URL}/retrieve", json={**body, "strategy": "keyword"}
+    )
+    assert ranked.json()["evidence"][0]["document"] == "Week 2"
+    missing = await materials_client.post(
+        f"{MATERIALS_URL}/retrieve", json={**body, "pages": pages[1:]}
+    )
+    assert missing.status_code == 422
+
+
+async def test_lecture_only_can_generate_but_rechecks_topic(materials_client: AsyncClient):
+    pair = {
+        "lecture": (
+            "Nested loops: for (int i=0; i<3; i++) the outer loop restarts "
+            "the inner loop. printf prints the result."
+        ),
+        "topic": "nested loops",
+    }
+    result = await materials_client.post(f"{MATERIALS_URL}/propose", json=pair)
+    assert result.status_code == 200
+    assert result.json()["family"] == "nested-loops"
+    request = {**pair, "family": "nested-loops", "seed": 23}
+    batch = await materials_client.post(f"{MATERIALS_URL}/generate", json=request)
+    assert len(batch.json()["questions"]) == 5
+    mismatch = await materials_client.post(
+        f"{MATERIALS_URL}/generate", json={**request, "topic": "gene expression"}
+    )
+    assert mismatch.status_code == 422
+
+
+async def test_unrelated_module_can_use_its_own_explicit_table(materials_client: AsyncClient):
+    pair = {
+        "lecture": (
+            "Moon | Planet\n--- | ---\nIo | Jupiter\nTitan | Saturn\n"
+            "Triton | Neptune\nPhobos | Mars\nMiranda | Uranus"
+        ),
+        "topic": "Moon and planet",
+    }
+    result = await materials_client.post(f"{MATERIALS_URL}/propose", json=pair)
+    assert result.json()["family"] == "table-lookup"
+    request = {**pair, "family": "table-lookup", "seed": 987}
+    result = await materials_client.post(f"{MATERIALS_URL}/generate", json=request)
+    assert len({q["stem"] for q in result.json()["questions"]}) == 5
+    for q in result.json()["questions"]:
+        expected = q["options"][q["correct_index"]]
+        assert expected in pair["lecture"]
+    # An exam asking for an explanation cannot be answered by looking up a named cell.
+    other = await materials_client.post(
+        f"{MATERIALS_URL}/propose", json={**pair, "exam": "Explain how orbital resonances develop."}
+    )
+    assert other.json()["family"] is None
+
+
+async def test_evidence_receipt_tracks_edits_and_replay(materials_client: AsyncClient) -> None:
+    refs = [
+        {"document": "lecture.pdf", "page": 2, "role": "lecture", "edited": False},
+        {"document": "paper.pdf", "page": 5, "role": "exam", "edited": False},
+    ]
+    body = {**EXCERPTS, "seed": 33, "family": "nested-loops", "sources": refs}
+    first = await materials_client.post(f"{MATERIALS_URL}/generate", json=body)
+    assert first.status_code == 200 and first.json()["sources"] == refs
+    assert len(first.json()["input_sha256"]) == 64
+    corrected = await materials_client.post(
+        f"{MATERIALS_URL}/generate",
+        json={
+            **body,
+            "lecture": EXCERPTS["lecture"] + " One correction.",
+            "sources": [{**refs[0], "edited": True}, refs[1]],
+        },
+    )
+    assert corrected.json()["input_sha256"] != first.json()["input_sha256"]
+    assert (
+        first.json() == (await materials_client.post(f"{MATERIALS_URL}/generate", json=body)).json()
+    )
+
+
+@pytest.mark.skipif(shutil.which("pdftotext") is None, reason="Poppler is required")
+async def test_uploaded_glossary_uses_generic_workflow(materials_client: AsyncClient) -> None:
+    lines = [
+        "Thermodynamics glossary",
+        "Isobaric: A process that takes place at constant pressure.",
+        "Isochoric: A process that takes place at constant volume.",
+        "Isothermal: A process that takes place at constant temperature.",
+        "Adiabatic: A process in which no heat is exchanged.",
+        "Reversible: An ideal process that can be reversed without net change.",
+    ]
+    stream = "BT /F1 9 Tf 60 760 Td " + " 0 -13 Td ".join(f"({s}) Tj" for s in lines) + " ET"
+    response = await materials_client.post(
+        f"{MATERIALS_URL}/pages",
+        files={"file": ("course.pdf", sample_pdf(stream), "application/pdf")},
+    )
+    assert response.status_code == 200
+    page = {"document": "course.pdf", "page": 1, "text": response.json()["pages"][0]}
+    retrieved = await materials_client.post(
+        f"{MATERIALS_URL}/retrieve",
+        json={"pages": [page], "topic": "thermodynamics", "strategy": "keyword"},
+    )
+    lecture = retrieved.json()["evidence"][0]["text"]
+    inputs = {"lecture": lecture, "topic": "thermodynamics"}
+    proposed = await materials_client.post(f"{MATERIALS_URL}/propose", json=inputs)
+    assert proposed.json()["family"] == "glossary-term"
+    batch = await materials_client.post(
+        f"{MATERIALS_URL}/generate", json={**inputs, "family": "glossary-term", "seed": 3}
+    )
+    assert batch.status_code == 200
+    for q in batch.json()["questions"]:
+        term = q["options"][q["correct_index"]]
+        assert (
+            next(line.split(": ", 1)[1] for line in lines if line.startswith(term + ":"))
+            in q["stem"]
+        )
