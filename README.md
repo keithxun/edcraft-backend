@@ -50,6 +50,35 @@ encodes each page. A restart clears the cache. For long pages, the ranker sample
 eight passages across the page and uses the highest cosine similarity to the topic.
 Selected-page and keyword retrieval work before the model is installed.
 
+### Practice generation from course materials
+
+Choose a subject, review the retrieved lecture excerpt, and optionally select one complete
+exam subquestion. The subject narrows the eligible operations. The lecture and exam text
+determine whether a supported operation applies. Glossary recall and table lookup are
+available across subjects when the selected material supports them.
+
+| Subject | Supported operations from course materials |
+| --- | --- |
+| Programming | Supported C output traces for nested loops, pointer swaps, and recursive reductions |
+| Mathematics | Ratio and limit comparison tests, steepest ascent, and classification of separable quartic critical points |
+| Physics | Steady-current resistor power with resistance in Ω and current in A, and Hooke’s law force magnitude with stiffness in N/m and extension in m within the proportional limit |
+| Chemistry | Smallest whole-number coefficients for a curated acid–base neutralisation equation written with both reactants and products |
+| Biology | Unconditional dominant or recessive phenotype probability in a complete-dominance monohybrid pea-plant cross, with both canonical parent genotypes and the allele pair stated |
+
+For the science operations, include a direct statement of the solving rule in the selected
+lecture text and either the complete exam task or one matching `Example:` or `Worked example:`
+in the lecture.
+For example, a Physics lecture can explain `P = I²R` and include this exercise:
+
+> Worked example: A resistor of resistance 10 Ω carries a steady current of 0.4 A.
+> What power does it dissipate?
+
+Each science batch samples five variants from a finite set of checked classroom cases. It
+keeps the requested operation, excludes the selected example, and rechecks the key and
+distinct options for every generated question. Repeating the same input and seed reproduces
+the batch for the same generator version. The materials workflow supports the operations in
+the table. The separate authoring workflow uses the broader syllabus catalogues.
+
 ### 2. Setup environment
 
 ```bash
@@ -72,6 +101,17 @@ make nomad
 make dev
 ```
 
+
+### Local five-subject demo
+
+Place the frontend checkout beside this backend, named `edcraft-frontend`. For Compose, configure `DATABASE_URL` in `.env.development` to use the `postgres` service hostname and the same credentials as `POSTGRES_USER`, `POSTGRES_PASSWORD` and `POSTGRES_DB`. For a local password-login demo, set `EMAIL_ENABLED=false` in that file so you can create an active demo account without SMTP. For host-based development the database hostname is normally `localhost`. The backend includes a checksum-locked validator wheel built from the Git revision recorded under `vendor/`. The source is maintained in the validator repository on `codex/domain-seam`.
+
+```sh
+docker compose --profile demo up --build -d
+docker compose --profile demo exec backend python -m edcraft_backend.services.material_embeddings
+```
+
+Open http://localhost:3000, create a local account, sign in and select **AI Authoring → From module materials**. The second command enables local semantic retrieval. Page selection and keyword retrieval work independently.
 
 ### 4. Access API
 

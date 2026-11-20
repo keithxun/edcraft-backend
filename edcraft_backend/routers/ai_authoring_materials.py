@@ -22,6 +22,7 @@ from edcraft_backend.schemas.materials import (
     MaterialTopicList,
 )
 from edcraft_backend.services import material_pdf, material_practice, material_retrieval
+from edcraft_backend.services.ai_domains import LIBRARY_REVISION, enabled_domains
 
 router = APIRouter(prefix="/materials", dependencies=[Depends(get_current_user)])
 
@@ -113,7 +114,9 @@ def retrieve_material_evidence(payload: MaterialRetrievalRequest) -> MaterialRet
 def propose_material_task(payload: MaterialExcerpts) -> MaterialTaskProposal:
     """Identify a checked task from the reviewed lecture evidence and optional exam."""
     return MaterialTaskProposal.model_validate(
-        material_practice.propose(payload.lecture, payload.exam, payload.topic)
+        material_practice.propose(
+            payload.lecture, payload.exam, payload.topic, payload.domain, enabled=enabled_domains()
+        )
     )
 
 
@@ -122,7 +125,13 @@ def generate_material_practice(payload: MaterialPracticeRequest) -> MaterialPrac
     """Recheck the excerpts and generate a reproducible batch for the chosen task."""
     try:
         questions, version = material_practice.generate(
-            payload.family, payload.seed, payload.lecture, payload.exam, payload.topic
+            payload.family,
+            payload.seed,
+            payload.lecture,
+            payload.exam,
+            payload.topic,
+            payload.domain,
+            enabled=enabled_domains(),
         )
     except ValueError as exc:
         raise HTTPException(
@@ -132,7 +141,7 @@ def generate_material_practice(payload: MaterialPracticeRequest) -> MaterialPrac
     # Hash the exact reviewed input. Page references describe the user's selection;
     # corrections and supplied source labels are part of this receipt.
     snapshot = json.dumps(
-        payload.model_dump(exclude={"seed"}),
+        payload.model_dump(exclude={"seed"}, exclude_none=True),
         sort_keys=True,
         ensure_ascii=False,
         separators=(",", ":"),
@@ -142,6 +151,7 @@ def generate_material_practice(payload: MaterialPracticeRequest) -> MaterialPrac
             "questions": questions,
             "seed": payload.seed,
             "generator_version": version,
+            "validator_revision": LIBRARY_REVISION,
             "sources": payload.sources,
             "input_sha256": hashlib.sha256(snapshot.encode()).hexdigest(),
         }

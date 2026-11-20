@@ -6,9 +6,9 @@ from edcraft_backend.schemas.ai_authoring import SubmitAuthoringJobRequest
 from edcraft_backend.services import ai_domains
 
 
-def test_default_enables_code_and_math(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_default_enables_all_five_subjects(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(ai_domains.ENABLED_DOMAINS_ENV, raising=False)
-    assert ai_domains.enabled_domains() == ("code", "math")
+    assert set(ai_domains.enabled_domains()) == {"code", "math", "biology", "chemistry", "physics"}
 
 
 def test_allowlist_hides_a_registered_domain(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -17,7 +17,7 @@ def test_allowlist_hides_a_registered_domain(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_unregistered_names_are_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv(ai_domains.ENABLED_DOMAINS_ENV, "code, physics ,")
+    monkeypatch.setenv(ai_domains.ENABLED_DOMAINS_ENV, "code, unknown ,")
     assert ai_domains.enabled_domains() == ("code",)
 
 

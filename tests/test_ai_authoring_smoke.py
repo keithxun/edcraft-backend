@@ -1,5 +1,6 @@
 """Smoke the real pinned AI workflow with a scripted provider and real MCP checks."""
 
+import hashlib
 import tomllib
 from pathlib import Path
 
@@ -17,8 +18,11 @@ def test_library_revision_matches_the_pyproject_pin() -> None:
     pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
     with pyproject.open("rb") as handle:
         config = tomllib.load(handle)
-    pinned = config["tool"]["uv"]["sources"]["edcraft-validator"]["rev"]
-    assert LIBRARY_REVISION == pinned
+    wheel = pyproject.parent / config["tool"]["uv"]["sources"]["edcraft-validator"]["path"]
+    assert wheel.parent.name == LIBRARY_REVISION
+    lock = tomllib.loads(pyproject.with_name("uv.lock").read_text())
+    entry = next(p for p in lock["package"] if p["name"] == "edcraft-validator")
+    assert entry["wheels"][0]["hash"] == "sha256:" + hashlib.sha256(wheel.read_bytes()).hexdigest()
 
 
 def test_scripted_library_pipeline_checks_and_reloads_a_real_artifact() -> None:

@@ -25,6 +25,19 @@ def test_grounded_recall_reuses_only_explicit_lecture_definitions(exam):
         assert len(set(q["options"])) == 4
 
 
+def test_glossary_remains_available_as_a_subject_neutral_operation():
+    expected = material_practice.generate("glossary-term", 42, NOTES, "", "Thermodynamics")
+    for domain, enabled in [("physics", ("physics",)), (None, ())]:
+        proposal = material_practice.propose(NOTES, "", "Thermodynamics", domain, enabled=enabled)
+        assert proposal["family"] == "glossary-term"
+        assert (
+            material_practice.generate(
+                "glossary-term", 42, NOTES, "", "Thermodynamics", domain, enabled=enabled
+            )
+            == expected
+        )
+
+
 @pytest.mark.parametrize(
     "topic,exam,notes",
     [

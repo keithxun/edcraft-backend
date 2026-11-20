@@ -561,7 +561,7 @@ requires-dist = [
     { name = "asyncpg", specifier = ">=0.31.0" },
     { name = "authlib", specifier = ">=1.3.0" },
     { name = "edcraft-engine", git = "https://github.com/edcraft-org/edcraft-engine.git" },
-    { name = "edcraft-validator", git = "file:///Users/keith/Documents/Projects/edcraft/ai?rev=40749baa33ef398025d6d04e943290d7609e38f2" },
+    { name = "edcraft-validator", path = "vendor/eb86a932cb20ec7436e60bcc690d3ecea5cc05a5/edcraft_validator-0.1.0-py3-none-any.whl" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.125.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "itsdangerous", specifier = ">=2.2.0" },
@@ -602,7 +602,7 @@ dependencies = [
 [[package]]
 name = "edcraft-validator"
 version = "0.1.0"
-source = { git = "file:///Users/keith/Documents/Projects/edcraft/ai?rev=40749baa33ef398025d6d04e943290d7609e38f2#40749baa33ef398025d6d04e943290d7609e38f2" }
+source = { path = "vendor/eb86a932cb20ec7436e60bcc690d3ecea5cc05a5/edcraft_validator-0.1.0-py3-none-any.whl" }
 dependencies = [
     { name = "fastmcp" },
     { name = "hypothesis" },
@@ -613,6 +613,24 @@ dependencies = [
     { name = "step-tracer" },
     { name = "sympy" },
 ]
+wheels = [
+    { filename = "edcraft_validator-0.1.0-py3-none-any.whl", hash = "sha256:856297ad5176dbf54db606d7cef591f25dac112d8bdf6ab1bc8df63adba7b946" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastmcp", specifier = ">=4,<5" },
+    { name = "hypothesis", specifier = ">=6.140,<7" },
+    { name = "jsonschema", specifier = ">=4.23,<5" },
+    { name = "openai", specifier = ">=1.99,<2" },
+    { name = "pydantic", specifier = ">=2.11,<3" },
+    { name = "python-dotenv", specifier = ">=1.1,<2" },
+    { name = "step-tracer" },
+    { name = "sympy", specifier = ">=1.13,<2" },
+    { name = "torch", marker = "extra == 'relevance'", specifier = ">=2.6,<3" },
+    { name = "transformers", marker = "extra == 'relevance'", specifier = ">=5.0,<6" },
+]
+provides-extras = ["relevance"]
 
 [[package]]
 name = "email-validator"

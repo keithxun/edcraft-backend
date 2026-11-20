@@ -5,6 +5,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from edcraft_backend.schemas.ai_authoring import StrictSeed
+from edcraft_backend.services.ai_domains import enabled_domains
 
 Excerpt = Annotated[str, Field(min_length=1, max_length=60_000, pattern=r"\S")]
 
@@ -71,9 +72,16 @@ class MaterialExcerpts(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     sources: list[MaterialSourceRef] = Field(default_factory=list, max_length=750)
+    domain: str | None = Field(default=None, min_length=1, max_length=64)
     lecture: Excerpt
     exam: str = Field(default="", max_length=24_000)
     topic: str = Field(default="", max_length=500)
+
+    @model_validator(mode="after")
+    def enabled_subject(self) -> "MaterialExcerpts":
+        if self.domain is not None and self.domain not in enabled_domains():
+            raise ValueError("Choose a subject enabled for authoring.")
+        return self
 
 
 class MaterialTaskAlternative(BaseModel):
@@ -104,6 +112,7 @@ class MaterialPracticeQuestion(BaseModel):
 class MaterialPracticeBatch(BaseModel):
     questions: list[MaterialPracticeQuestion]
     seed: StrictSeed
+    validator_revision: str
     generator_version: int
     sources: list[MaterialSourceRef]
     input_sha256: str

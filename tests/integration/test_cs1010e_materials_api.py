@@ -13,6 +13,7 @@ from edcraft_backend.dependencies import get_current_user
 from edcraft_backend.main import app
 from edcraft_backend.models.user import User
 from edcraft_backend.services import cs1010e_practice, material_pdf
+from edcraft_backend.services.ai_domains import LIBRARY_REVISION
 from edcraft_backend.services.cs1010e.functions import MAX_OUTLINE
 
 MATERIALS_URL = "/ai-authoring/materials"
@@ -306,6 +307,7 @@ async def test_evidence_receipt_tracks_edits_and_replay(materials_client: AsyncC
     first = await materials_client.post(f"{MATERIALS_URL}/generate", json=body)
     assert first.status_code == 200 and first.json()["sources"] == refs
     assert len(first.json()["input_sha256"]) == 64
+    assert first.json()["validator_revision"] == LIBRARY_REVISION
     corrected = await materials_client.post(
         f"{MATERIALS_URL}/generate",
         json={
@@ -355,3 +357,35 @@ async def test_uploaded_glossary_uses_generic_workflow(materials_client: AsyncCl
             next(line.split(": ", 1)[1] for line in lines if line.startswith(term + ":"))
             in q["stem"]
         )
+
+
+async def test_selected_domain_scopes_proposal_generation_and_receipt(
+    materials_client: AsyncClient,
+):
+    proposal = await materials_client.post(
+        f"{MATERIALS_URL}/propose", json={**EXCERPTS, "domain": "math"}
+    )
+    assert proposal.status_code == 200 and proposal.json()["family"] is None
+    request = {**EXCERPTS, "seed": 5, "family": "nested-loops"}
+    automatic = await materials_client.post(f"{MATERIALS_URL}/generate", json=request)
+    explicit = await materials_client.post(
+        f"{MATERIALS_URL}/generate", json={**request, "domain": "code"}
+    )
+    assert automatic.status_code == explicit.status_code == 200
+    assert automatic.json()["questions"] == explicit.json()["questions"]
+    assert explicit.json()["input_sha256"] != automatic.json()["input_sha256"]
+    assert (
+        await materials_client.post(f"{MATERIALS_URL}/generate", json={**request, "domain": "math"})
+    ).status_code == 422
+
+
+async def test_disabled_material_domain_is_rejected_even_in_auto_mode(
+    materials_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("AI_AUTHORING_ENABLED_DOMAINS", "math")
+    explicit = await materials_client.post(
+        f"{MATERIALS_URL}/propose", json={**EXCERPTS, "domain": "code"}
+    )
+    assert explicit.status_code == 422
+    auto = await materials_client.post(f"{MATERIALS_URL}/propose", json=EXCERPTS)
+    assert auto.status_code == 200 and auto.json()["family"] is None

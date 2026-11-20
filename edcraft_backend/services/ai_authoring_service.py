@@ -74,15 +74,13 @@ from edcraft_backend.services.ai_authoring_store import (
     EvidenceRequirement,
     StoredJob,
 )
-from edcraft_backend.services.ai_domains import enabled_domains
+from edcraft_backend.services.ai_domains import LIBRARY_REVISION, enabled_domains
 from edcraft_backend.services.provider_endpoint import ResolvedConnection
 
 ApprovalView = StoredReviewerApproval
 
 logger = logging.getLogger(__name__)
 
-# Must match [tool.uv.sources].edcraft-validator.rev in pyproject.toml.
-LIBRARY_REVISION = "40749baa33ef398025d6d04e943290d7609e38f2"
 MAX_FINDING_TEXT = 2_000
 
 
@@ -297,9 +295,13 @@ class AiAuthoringService:
             candidate_is_historical_attempt=candidate is not None,
             difficulty=summary.difficulty if summary else None,
             relevance=summary.relevance if summary else None,
-            warnings=list(summary.warnings) if summary else [],
+            warnings=list(
+                dict.fromkeys(
+                    [*(summary.warnings if summary else []), *(review.warnings if review else [])]
+                )
+            ),
             approval=self._approval_view(job.approval),
-            error=job.error,
+            error=job.error or (summary.error if summary else None),
         )
 
     async def preview(self, owner_id: UUID, job_id: UUID, seed: int) -> PreviewResponse:

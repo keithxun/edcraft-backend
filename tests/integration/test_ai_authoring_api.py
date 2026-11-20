@@ -200,7 +200,7 @@ async def test_capabilities_are_safe_and_server_configured(checked_env: Authorin
     response = await checked_env.client.get("/ai-authoring/capabilities")
     assert response.status_code == 200
     body = response.json()
-    assert body["enabled_domains"] == ["code", "math"]
+    assert set(body["enabled_domains"]) == {"code", "math", "biology", "chemistry", "physics"}
     for subject, required in {"math": "H2 skill 1.1.", "code": "H2 skill 1.3.preorder."}.items():
         prompts = body["syllabus_prompts"][subject].values()
         assert any(prompt.startswith(required) for prompt in prompts)
