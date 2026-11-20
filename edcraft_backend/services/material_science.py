@@ -4,7 +4,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from fractions import Fraction
-from itertools import combinations, combinations_with_replacement, product
+from itertools import combinations_with_replacement, product
 from random import Random
 from typing import TypedDict
 from unicodedata import normalize
@@ -38,7 +38,7 @@ _EXAMPLE_END = re.compile(r"\n[ \t]*(?:\n|(?:answer|solution)[ \t]*[:=])", re.I)
 _SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+|\n[ \t]*\n")
 _QUALIFIED_RULE = (
     r"\b(?:errors?|incorrect(?:ly)?|false|mistak\w*|wrong(?:ly)?|no|not|never|cannot|"
-    r"without|unlike|except|instead|rather than)\b"
+    r"without|unlike|except|instead|rather than|avoid\w*|misconceptions?)\b|n['’]t\b"
 )
 
 
@@ -279,28 +279,19 @@ def _read_neutralisation_exam(exam: str) -> tuple[str, ...] | None:
 def _coefficient_foils(
     reaction: ReactionEntry, key: tuple[int, ...], rng: Random
 ) -> list[tuple[int, ...]]:
-    def unbalanced(coefficients: tuple[int, ...]) -> bool:
-        return (
-            first_unbalanced_element(reaction.reactants, reaction.products, coefficients)
-            is not None
-        )
-
-    # A swap preserves the sum, so the sum alone cannot identify the key.
-    swaps = {
-        (*key[:i], key[j], *key[i + 1 : j], key[i], *key[j + 1 :])
-        for i, j in combinations(range(len(key)), 2)
-        if key[i] != key[j]
-    }
-    shifted = [
-        key[:i] + (changed,) + key[i + 1 :]
-        for i, coefficient in enumerate(key)
-        for changed in (coefficient - 1, coefficient + 1)
-        if changed > 0
-    ]
-    return [
-        rng.choice([choice for choice in sorted(swaps) if unbalanced(choice)]),
-        *rng.sample([choice for choice in shifted if unbalanced(choice)], 2),
-    ]
+    # Vary two coefficients independently. Each displayed value at a changed
+    # position appears twice, and two options share the correct total.
+    down = rng.choice([index for index, value in enumerate(key) if value > 1])
+    up = rng.choice([index for index in range(len(key)) if index != down])
+    foils = []
+    for decrease, increase in ((1, 0), (0, 1), (1, 1)):
+        coefficients = list(key)
+        coefficients[down] -= decrease
+        coefficients[up] += increase
+        if first_unbalanced_element(reaction.reactants, reaction.products, coefficients) is None:
+            raise ValueError("A proposed neutralisation distractor conserves every element.")
+        foils.append(tuple(coefficients))
+    return foils
 
 
 def _neutralisation_questions(exam: tuple[str, ...], rng: Random) -> list[Question]:
@@ -442,7 +433,7 @@ OPERATIONS = {
         ),
         read_exam=_read_neutralisation_exam,
         questions=_neutralisation_questions,
-        version=2,
+        version=3,
     ),
     "biology-monohybrid-probability": Operation(
         domain="biology",

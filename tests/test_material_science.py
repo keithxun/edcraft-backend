@@ -279,3 +279,25 @@ def test_biology_keeps_the_exam_allele_and_requested_phenotype() -> None:
         values = [Fraction(value) for value in question["options"]]
         assert values.count(expected) == 1
         assert values[question["correct_index"]] == expected
+
+
+def test_chemistry_choices_hide_the_key_from_a_position_majority() -> None:
+    domain, family, lecture, exam, topic = CHEMISTRY
+    for seed in range(16):
+        batch, _ = material_practice.generate(family, seed, lecture, exam, topic, domain)
+        for question in batch:
+            options = [option.split(", ") for option in question["options"]]
+            changing_columns = [
+                column for column in zip(*options, strict=True) if len(set(column)) > 1
+            ]
+            assert len(changing_columns) >= 2
+            assert all(
+                max(column.count(value) for value in column) == 2 for column in changing_columns
+            )
+
+
+@pytest.mark.parametrize("caution", ["Don't use", "Don’t use", "Avoid using", "A misconception is"])
+def test_science_declines_a_cautioned_formula(caution: str) -> None:
+    domain, _, _, exam, topic = SPRING
+    lecture = f"Hooke's law. Within the proportional limit. {caution} F = kx."
+    assert material_practice.propose(lecture, exam, topic, domain)["family"] is None
