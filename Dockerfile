@@ -26,6 +26,7 @@ FROM python:3.12-slim
 # Install runtime dependencies only
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
+    poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user and writable durable AI authoring directory

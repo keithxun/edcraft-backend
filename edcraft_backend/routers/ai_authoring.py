@@ -10,6 +10,7 @@ from edcraft_backend.dependencies import (
     CurrentUserDep,
     ProviderConnectionServiceDep,
 )
+from edcraft_backend.routers import ai_authoring_materials
 from edcraft_backend.schemas.ai_authoring import (
     ApprovalRequest,
     ApprovalResponse,
@@ -48,6 +49,7 @@ router = APIRouter(
     tags=["ai-authoring"],
     responses=_ERROR_RESPONSES,
 )
+router.include_router(ai_authoring_materials.router)
 
 
 @router.get("/capabilities", response_model=AuthoringCapabilitiesResponse)

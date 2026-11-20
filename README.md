@@ -28,6 +28,9 @@ uv sync
 
 Requires [`uv`](https://github.com/astral-sh/uv)
 
+PDF uploads in the materials-to-practice pilot require Poppler's `pdftotext` on `PATH`.
+Install `poppler` with Homebrew or `poppler-utils` on Debian or Ubuntu. The backend Docker
+image includes it.
 
 ### 2. Setup environment
 
