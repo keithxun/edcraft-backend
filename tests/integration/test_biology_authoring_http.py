@@ -6,10 +6,14 @@ from functools import partial
 from pathlib import Path
 
 import pytest
-from edcraft_validator.domains.biology import author_offer, h2_cases
+from edcraft_validator.domains.biology import h2_cases
 
 from edcraft_backend.services.ai_domains import ENABLED_DOMAINS_ENV
-from tests.biology_authoring_helpers import run_scripted_biology_pipeline
+from tests.biology_authoring_helpers import (
+    FIT_ITEM,
+    historical_biology_executor,
+    run_scripted_biology_pipeline,
+)
 from tests.integration.test_ai_authoring_api import approve, complete_job, env_for, review
 
 
@@ -69,6 +73,41 @@ async def test_real_scripted_biology_pipeline_round_trips_through_api(
 
 
 @pytest.mark.asyncio
+async def test_authored_fit_replays_the_checked_count_table(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ENABLED_DOMAINS_ENV, "biology")
+    author = partial(run_scripted_biology_pipeline, item=FIT_ITEM)
+    async with env_for(tmp_path, author) as env:
+        job_id = await complete_job(
+            env,
+            domain="biology",
+            prompt="Create an H2 Biology chi-square count table with an expected ratio. "
+            "Supply a critical value and ask for the statistic and test decision.",
+            difficulty="medium",
+        )
+        envelope = await review(env, job_id)
+        assert envelope["template"]["candidate"]["item"]["schema_version"] == "bio-fit/0.1"
+        assert envelope["validation_limits"]["declared_domain_size"] == 2
+        digest = envelope["artifact_sha256"]
+        assert (await approve(env, job_id, digest)).status_code == 200
+        args = {"artifact_sha256": digest, "seed": 14, "quantity": 5}
+        url = f"/ai-authoring/jobs/{job_id}/generate"
+        response = await env.client.post(url, json=args)
+        assert response.status_code == 200, response.text
+        assert response.json() == (await env.client.post(url, json=args)).json()
+        for question in response.json()["questions"]:
+            assert question["operation"] == "chi_square_goodness_of_fit"
+            observed = question["parameters"]["category_1"]
+            assert f"smooth leaves: {observed}" in question["question"]
+            expected = {
+                "21": "χ² = 1.88. Fail to reject the model.",
+                "31": "χ² = 7.36. Reject the model.",
+            }
+            assert question["choices"][question["correct_index"]] == expected[observed]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "answers",
     [
@@ -77,13 +116,12 @@ async def test_real_scripted_biology_pipeline_round_trips_through_api(
         {"skill.visual.punnett": "S"},
     ],
 )
-async def test_h2_catalogue_biology_approval_and_replay(
+async def test_saved_h2_catalogue_biology_approval_and_replay(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, answers: dict[str, str]
 ) -> None:
     monkeypatch.setenv(ENABLED_DOMAINS_ENV, "code,math,biology")
-    run_pipeline = partial(
-        run_scripted_biology_pipeline,
-        item={
+    run_pipeline = historical_biology_executor(
+        {
             "schema_version": "bio-h2/1",
             "cases": list(answers),
             "distractors": [0, 1, 2, 2, 3, 4],
@@ -156,9 +194,8 @@ async def test_saved_biology_approval_flags_the_superseded_case(
 ) -> None:
     monkeypatch.setenv(ENABLED_DOMAINS_ENV, "code,math,biology")
     earlier_catalogue = h2_cases.h2_catalogue(include_archived=True)
-    pipeline = partial(
-        run_scripted_biology_pipeline,
-        item={
+    pipeline = historical_biology_executor(
+        {
             "schema_version": "bio-h2/1",
             "cases": [old_id],
             "distractors": [1, 2, 3, 4, 5, 6],
@@ -166,7 +203,6 @@ async def test_saved_biology_approval_flags_the_superseded_case(
     )
     async with env_for(tmp_path, pipeline) as env:
         with monkeypatch.context() as earlier:
-            earlier.setattr(author_offer, "h2_catalogue", lambda: earlier_catalogue)
             earlier.setattr(h2_cases, "h2_catalogue", lambda **_: earlier_catalogue)
             job_id = await complete_job(
                 env, domain="biology", prompt=f"Make an H2 item for {old_id}."
@@ -203,16 +239,20 @@ async def test_saved_biology_approval_flags_the_superseded_case(
             "The request requires an original written response.",
         ),
         (
-            "Give observed counts of 24 and 16 and expected counts of 20 and 20. "
-            "Ask for the chi-square statistic and the test decision.",
-            "The verified chi-square cases cannot use those supplied data. "
-            "They use prepared counts and critical values.",
+            "Use chi-square to test model fit. Ask students to derive expected counts "
+            "from a two-locus cross and determine degrees of freedom.",
+            "The chi-square checker uses plant counts and a supplied expected ratio "
+            "or totals. It supports a decision when a critical value is supplied.",
         ),
         (
-            "Give observed and expected counts. Ask students to calculate only "
-            "the numeric chi-square statistic.",
-            "The verified cases that ask for a statistic also ask for a test "
-            "decision. A question asking for a statistic alone needs a different case.",
+            "Create an H2 Biology question on the offspring probability of a dihybrid cross.",
+            "The available Biology checker requires a one-gene autosomal cross "
+            "with complete dominance.",
+        ),
+        (
+            "Grade a student's original drawing of a plant cell from a microscope slide.",
+            "Assessing a student's drawing requires an open-response checker for the submitted "
+            "work and its method marks. The available checks verify multiple-choice answers.",
         ),
     ],
 )
@@ -224,7 +264,7 @@ async def test_biology_unsupported_request_stops_for_review_without_an_artifact(
         run_scripted_biology_pipeline,
         item={
             "schema_version": "bio-unsupported/1",
-            "reason": "The catalogue does not cover the request.",
+            "reason": "The requested assessment needs a different check.",
         },
     )
     async with env_for(tmp_path, run_pipeline) as env:
@@ -289,7 +329,7 @@ async def test_biology_unsupported_request_stops_for_review_without_an_artifact(
         ),
     ],
 )
-async def test_biology_task_routing_preserves_requested_operation_through_api(
+async def test_saved_biology_cases_keep_their_checked_operation_through_api(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     prompt: str,
@@ -298,9 +338,8 @@ async def test_biology_task_routing_preserves_requested_operation_through_api(
     routine: bool,
 ) -> None:
     monkeypatch.setenv(ENABLED_DOMAINS_ENV, "biology")
-    run_pipeline = partial(
-        run_scripted_biology_pipeline,
-        item={
+    run_pipeline = historical_biology_executor(
+        {
             "schema_version": "bio-h2/1",
             "cases": list(answers),
             "distractors": [1, 2, 3, 4, 5, 6],
@@ -342,9 +381,8 @@ async def test_chemiosmosis_compartment_contrasts_replay_through_api(
         "skill.energy.chemiosmosis_compartment_contrasts",
         "skill.energy.chemiosmosis_acidity_contrasts",
     ]
-    pipeline = partial(
-        run_scripted_biology_pipeline,
-        item={
+    pipeline = historical_biology_executor(
+        {
             "schema_version": "bio-h2/1",
             "cases": cases,
             "distractors": [6] * (num_distractors + 3),

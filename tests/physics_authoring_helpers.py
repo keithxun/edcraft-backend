@@ -27,6 +27,7 @@ from edcraft_validator.domains.physics.h2_statement_data import (
     H2StatementProposal,
     requested_skill,
 )
+from edcraft_validator.domains.physics.physics_domain import LegacyPhysicsDomain
 from edcraft_validator.domains.physics.physics_schemas import (
     PhysicsTemplateContent,
     PhysicsTemplateSpec,
@@ -238,6 +239,7 @@ def run_scripted_physics_pipeline(
 
     return run_authoring_job_sync(
         command,
+        domain_factory=lambda _: LegacyPhysicsDomain(),
         application_factory=application_factory,
         provider_factory=lambda selection: ScriptedPhysicsProvider(),
         on_progress=on_progress,
@@ -259,6 +261,7 @@ def run_scripted_h2_physics_pipeline(
     )
     return run_authoring_job_sync(
         command,
+        domain_factory=lambda _: LegacyPhysicsDomain(),
         application_factory=lambda: TemplateApplication(tool_client=client),
         provider_factory=lambda selection: ScriptedH2PhysicsProvider(unsupported),
         on_progress=on_progress,

@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 from edcraft_validator.domains.physics.h2_authoring import H2CompactUnsupported
-from edcraft_validator.domains.physics.physics_domain import PhysicsDomain
+from edcraft_validator.domains.physics.physics_domain import LegacyPhysicsDomain
 from edcraft_validator.domains.physics.physics_schemas import PhysicsQuestionInstance
 
 from edcraft_backend.services.ai_domains import ENABLED_DOMAINS_ENV
@@ -299,10 +299,10 @@ async def test_h2_physics_unexpected_construction_error_still_fails(
 ) -> None:
     monkeypatch.setenv(ENABLED_DOMAINS_ENV, "code,math,physics")
 
-    def fail_to_build(self: PhysicsDomain, request: Any, proposal: Any) -> None:
+    def fail_to_build(self: LegacyPhysicsDomain, request: Any, proposal: Any) -> None:
         raise RuntimeError("internal failure")
 
-    monkeypatch.setattr(PhysicsDomain, "build_candidate", fail_to_build)
+    monkeypatch.setattr(LegacyPhysicsDomain, "build_candidate", fail_to_build)
     async with env_for(tmp_path, run_scripted_h2_physics_pipeline) as env:
         job_id = await submit(
             env, domain="physics", prompt="H2 Physics 9478: find a wave's propagation speed."

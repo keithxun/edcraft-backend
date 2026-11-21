@@ -13,6 +13,7 @@ from edcraft_validator.application.authoring_api import (
 )
 from edcraft_validator.application.authoring_contracts import AuthoringProgress
 from edcraft_validator.application.template_workflow import TemplateApplication
+from edcraft_validator.domains.chemistry.chemistry_domain import LegacyChemistryDomain
 from edcraft_validator.domains.chemistry.chemistry_schemas import (
     BalancedEquationTarget,
     ChemistryItemSpec,
@@ -186,6 +187,7 @@ def run_scripted_chemistry_pipeline(
 
     return run_authoring_job_sync(
         command,
+        domain_factory=lambda _: LegacyChemistryDomain(),
         application_factory=application_factory,
         provider_factory=lambda selection: ScriptedChemistryProvider(proposal_factory),
         on_progress=on_progress,

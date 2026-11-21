@@ -208,6 +208,7 @@ class AiAuthoringService:
             owner_id=owner_id,
             request=AuthoringRequestRecord(
                 prompt=request.prompt,
+                materials=request.materials,
                 difficulty=request.difficulty,
                 num_distractors=request.num_distractors,
                 domain=request.domain,
@@ -535,6 +536,7 @@ def _domain_request(request: SubmitAuthoringJobRequest) -> Any:
         return domain.request_model.model_validate(
             {
                 "prompt": request.prompt,
+                **({"materials": request.materials.model_dump()} if request.materials else {}),
                 "difficulty": request.difficulty,
                 "num_distractors": request.num_distractors,
             }

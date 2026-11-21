@@ -1,7 +1,5 @@
 """Authenticated materials-to-practice pilot endpoints."""
 
-import hashlib
-import json
 from collections.abc import AsyncGenerator
 from typing import cast
 
@@ -21,8 +19,7 @@ from edcraft_backend.schemas.materials import (
     MaterialTaskProposal,
     MaterialTopicList,
 )
-from edcraft_backend.services import material_pdf, material_practice, material_retrieval
-from edcraft_backend.services.ai_domains import LIBRARY_REVISION, enabled_domains
+from edcraft_backend.services import material_pdf, material_retrieval
 
 router = APIRouter(prefix="/materials", dependencies=[Depends(get_current_user)])
 
@@ -110,49 +107,18 @@ def retrieve_material_evidence(payload: MaterialRetrievalRequest) -> MaterialRet
     )
 
 
-@router.post("/propose", response_model=MaterialTaskProposal)
+@router.post("/propose", response_model=MaterialTaskProposal, deprecated=True)
 def propose_material_task(payload: MaterialExcerpts) -> MaterialTaskProposal:
-    """Identify a checked task from the reviewed lecture evidence and optional exam."""
-    return MaterialTaskProposal.model_validate(
-        material_practice.propose(
-            payload.lecture, payload.exam, payload.topic, payload.domain, enabled=enabled_domains()
-        )
+    """Retired family selector. New material requests use the authoring job endpoint."""
+    raise HTTPException(
+        status.HTTP_410_GONE, "Submit the reviewed excerpts with an AI Authoring job."
     )
 
 
-@router.post("/generate", response_model=MaterialPracticeBatch)
+@router.post("/generate", response_model=MaterialPracticeBatch, deprecated=True)
 def generate_material_practice(payload: MaterialPracticeRequest) -> MaterialPracticeBatch:
-    """Recheck the excerpts and generate a reproducible batch for the chosen task."""
-    try:
-        questions, version = material_practice.generate(
-            payload.family,
-            payload.seed,
-            payload.lecture,
-            payload.exam,
-            payload.topic,
-            payload.domain,
-            enabled=enabled_domains(),
-        )
-    except ValueError as exc:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_CONTENT,
-            "Choose a task supported by the current topic and reviewed evidence.",
-        ) from exc
-    # Hash the exact reviewed input. Page references describe the user's selection;
-    # corrections and supplied source labels are part of this receipt.
-    snapshot = json.dumps(
-        payload.model_dump(exclude={"seed"}, exclude_none=True),
-        sort_keys=True,
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
-    return MaterialPracticeBatch.model_validate(
-        {
-            "questions": questions,
-            "seed": payload.seed,
-            "generator_version": version,
-            "validator_revision": LIBRARY_REVISION,
-            "sources": payload.sources,
-            "input_sha256": hashlib.sha256(snapshot.encode()).hexdigest(),
-        }
+    """Old clients must submit a checked authoring job to generate new questions."""
+    raise HTTPException(
+        status.HTTP_410_GONE,
+        "Submit an AI Authoring job for new questions.",
     )

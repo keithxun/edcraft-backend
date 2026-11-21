@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -14,9 +14,18 @@ from uuid import UUID, uuid4
 
 import pytest
 import pytest_asyncio
+from edcraft_validator.application.authoring_api import (
+    AuthoringJobCommand,
+    AuthoringJobRecord,
+    run_authoring_job_sync,
+)
 from edcraft_validator.application.authoring_contracts import AuthoringProgress
 from edcraft_validator.domains.domain_registry import register_domain, unregister_domain
 from edcraft_validator.domains.math.math_schemas import MathQuestionInstance
+from edcraft_validator.llm.llm_contracts import (
+    PlannedGenerationResponse,
+    StructuredGenerationRequest,
+)
 from httpx import ASGITransport, AsyncClient
 
 from edcraft_backend.config.settings import (
@@ -201,7 +210,7 @@ async def test_capabilities_are_safe_and_server_configured(checked_env: Authorin
     assert response.status_code == 200
     body = response.json()
     assert set(body["enabled_domains"]) == {"code", "math", "biology", "chemistry", "physics"}
-    for subject, required in {"math": "H2 skill 1.1.", "code": "H2 skill 1.3.preorder."}.items():
+    for subject, required in {"math": "H2 Mathematics.", "code": "H2 Computing."}.items():
         prompts = body["syllabus_prompts"][subject].values()
         assert any(prompt.startswith(required) for prompt in prompts)
     assert body["difficulty_labels"] == ["easy", "medium", "hard"]
@@ -391,12 +400,20 @@ async def test_real_scripted_math_pipeline_round_trips_through_api(
         assert envelope["validation_limits"]["examples_checked"] == 12
         assert envelope["validation_limits"]["whole_domain"] is True
         assert envelope["validation_limits"]["declared_domain_size"] == 12
-        assert [check["status"] for check in envelope["checks"]] == ["passed"] * 4
+        assert [check["tool"] for check in envelope["checks"]] == [
+            "math_verify_item_spec",
+            "math_validate_options",
+            "assess_template_difficulty",
+            "assess_template_relevance",
+            "application_visible_variants",
+        ]
+        assert all(check["status"] == "passed" for check in envelope["checks"])
         assert [check["advisory"] for check in envelope["checks"]] == [
             False,
             False,
             True,
             True,
+            False,
         ]
 
         digest = envelope["artifact_sha256"]
@@ -412,6 +429,117 @@ async def test_real_scripted_math_pipeline_round_trips_through_api(
         assert batch.status_code == 200, batch.text
         assert batch.json()["domain"] == "math"
         assert [item["seed"] for item in batch.json()["questions"]] == [3, 4]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("domain", "prompt", "item", "case_id", "expected_answers"),
+    [
+        (
+            "chemistry",
+            "Ask how many oxygen atoms appear in a displayed number of formula units.",
+            {
+                "kind": "atom_count",
+                "formula": "Ca(OH)2",
+                "element": "O",
+                "molecule_counts": [1, 2],
+                "proposed_atoms_per_molecule": 2,
+                "distractor_atoms_per_molecule": [0, 1, 3, 4, 5, 6],
+            },
+            "atom_count",
+            {"2", "4"},
+        ),
+        (
+            "physics",
+            "Find the signed acceleration given the net force and mass.",
+            {
+                "kind": "quantitative",
+                "parameters": [
+                    {"name": "F", "unit": "N", "values": ["4", "6"]},
+                    {"name": "m", "unit": "kg", "values": ["2"]},
+                ],
+                "steps": [{"name": "a", "law": "newton_acceleration", "inputs": ["F", "m"]}],
+                "decimals": 0,
+                "proposed_answer": {"op": "div", "args": [{"param": "F"}, {"param": "m"}]},
+                "distractors": [
+                    {"op": "mul", "args": [{"param": "F"}, {"param": "m"}]},
+                    {"op": "add", "args": [{"param": "F"}, {"param": "m"}]},
+                    {"op": "div", "args": [{"param": "m"}, {"param": "F"}]},
+                    {"param": "F"},
+                    {"op": "neg", "args": [{"param": "F"}]},
+                    {"const": "0"},
+                ],
+            },
+            "newton_acceleration",
+            {"2 m/s²", "3 m/s²"},
+        ),
+    ],
+)
+async def test_fresh_science_task_round_trips_through_the_registered_domain(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    domain: str,
+    prompt: str,
+    item: dict[str, Any],
+    case_id: str,
+    expected_answers: set[str],
+) -> None:
+    monkeypatch.setenv(ENABLED_DOMAINS_ENV, domain)
+    checker = f"{domain}_verify_authored_task"
+
+    class ScriptedTaskAuthor:
+        provider = "stub"
+        model = "stub-model"
+
+        def generation_settings(self) -> dict[str, str]:
+            return {"mode": "scripted"}
+
+        def generate(
+            self, request: StructuredGenerationRequest[Any]
+        ) -> PlannedGenerationResponse[Any]:
+            assert checker in request.offered_tool_names
+            return request.response_model.model_validate(
+                {"proposal": {"item": item}, "checks": [{"name": checker, "arguments": {}}]}
+            )
+
+    def run(
+        command: AuthoringJobCommand,
+        credentials: object | None = None,
+        on_progress: Callable[[AuthoringProgress], None] | None = None,
+    ) -> AuthoringJobRecord:
+        return run_authoring_job_sync(
+            command, provider_factory=lambda _: ScriptedTaskAuthor(), on_progress=on_progress
+        )
+
+    async with env_for(tmp_path, run) as env:
+        job_id = await complete_job(env, domain=domain, prompt=prompt, difficulty="medium")
+        envelope = await review(env, job_id)
+        assert any(
+            check["tool"] == checker and check["status"] == "passed" and not check["advisory"]
+            for check in envelope["checks"]
+        )
+        [review_case] = envelope["template"]["case_previews"]
+        assert review_case["case_id"] == case_id
+        assert review_case["seed"] == 0
+        digest = envelope["artifact_sha256"]
+        assert (await approve(env, job_id, digest)).status_code == 200
+        url = f"/ai-authoring/jobs/{job_id}/generate"
+        args = {"artifact_sha256": digest, "seed": 0, "quantity": 8}
+        response = await env.client.post(url, json=args)
+        assert response.status_code == 200, response.text
+        batch = response.json()["questions"]
+        assert {question["answer"] for question in batch} == expected_answers
+        assert len({question["question"] for question in batch}) == 2
+        assert all(
+            len(set(question["choices"])) == 4
+            and question["choices"][question["correct_index"]] == question["answer"]
+            for question in batch
+        )
+        assert batch[0]["question"] == review_case["question"]
+        assert batch[0]["choices"] == review_case["choices"]
+        replay = await env.client.post(url, json=args)
+        assert replay.status_code == 200, replay.text
+        assert replay.json()["questions"] == batch
 
 
 @pytest.mark.asyncio
@@ -1300,12 +1428,13 @@ async def test_a_registered_domain_stays_hidden_until_enabled(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("subject,family,answer", [("math", "1.1", "7"), ("code", "1.2", "3")])
-async def test_h2_subject_can_review_approve_and_generate(
+async def test_legacy_h2_subject_can_review_approve_and_generate(
     tmp_path: Path, subject: str, family: str, answer: str
 ) -> None:
     from edcraft_validator.application.authoring_api import run_authoring_job_sync
     from edcraft_validator.application.template_workflow import TemplateApplication
     from edcraft_validator.domains.h2.checks import CHECK_NAME
+    from edcraft_validator.domains.h2.domain import H2Domain
     from edcraft_validator.mcp.client import FastMcpToolClient
     from edcraft_validator.mcp.server import create_validation_server
 
@@ -1324,6 +1453,7 @@ async def test_h2_subject_can_review_approve_and_generate(
     def run(command, credentials=None, on_progress=None):
         return run_authoring_job_sync(
             command,
+            domain_factory=H2Domain,
             application_factory=lambda: TemplateApplication(
                 tool_client=FastMcpToolClient(create_validation_server())
             ),
@@ -1353,3 +1483,60 @@ async def test_h2_subject_can_review_approve_and_generate(
         for q in response.json()["questions"]:
             assert len(set(q["choices"])) == 4
             assert q["choices"][q["correct_index"]] == q["answer"]
+
+
+@pytest.mark.asyncio
+async def test_job_keeps_reviewed_upload_separate_from_the_teacher_prompt(tmp_path: Path) -> None:
+    lecture_page = {
+        "document": "lecture.pdf",
+        "page": 3,
+        "text": "Python arithmetic: Evaluate `a + b - c` from left to right.",
+    }
+    prompt = "Trace a Python arithmetic return expression."
+
+    def run(command, credentials=None, on_progress=None):
+        assert command.request["materials"] == materials
+        return run_scripted_pipeline(command, credentials, on_progress)
+
+    async with env_for(tmp_path, run) as env:
+        retrieved = await env.client.post(
+            "/ai-authoring/materials/retrieve",
+            json={"pages": [lecture_page], "topic": "Python arithmetic", "strategy": "keyword"},
+        )
+        assert retrieved.status_code == 200, retrieved.text
+        [evidence] = retrieved.json()["evidence"]
+        assert evidence["text"] == lecture_page["text"]
+        materials = {
+            "lecture": [
+                {
+                    "document": evidence["document"],
+                    "pages": [evidence["page"]],
+                    "text": evidence["text"] + " Trace the returned value.",
+                    "edited": True,
+                }
+            ],
+            "exam": {
+                "document": "exam.pdf",
+                "pages": [2],
+                "text": "What does the calculation return?",
+                "edited": False,
+            },
+        }
+        job_id = await complete_job(env, prompt=prompt, materials=materials)
+        envelope = await review(env, job_id)
+        assert envelope["request"]["materials"] == materials
+        assert envelope["request"]["prompt"] == prompt
+        assert any(
+            check["tool"] == "application_material_variants" and check["status"] == "passed"
+            for check in envelope["checks"]
+        )
+        saved = env.service.store.read_artifact(job_id)
+        assert "application_material_variants" in saved.decode()
+        digest = envelope["artifact_sha256"]
+        assert (await approve(env, job_id, digest)).status_code == 200
+        url = f"/ai-authoring/jobs/{job_id}/generate"
+        payload = {"artifact_sha256": digest, "seed": 17, "quantity": 2}
+        first = await env.client.post(url, json=payload)
+        replay = await env.client.post(url, json=payload)
+        assert first.status_code == replay.status_code == 200, (first.text, replay.text)
+        assert first.json()["questions"] == replay.json()["questions"]

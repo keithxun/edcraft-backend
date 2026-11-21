@@ -98,6 +98,7 @@ class MaterialTaskProposal(BaseModel):
 
 
 class MaterialPracticeRequest(MaterialExcerpts):
+    input_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     family: str = Field(min_length=1, max_length=64)
     seed: StrictSeed
 

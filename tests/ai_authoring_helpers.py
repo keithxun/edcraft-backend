@@ -95,6 +95,18 @@ CANDIDATE: dict[str, Any] = {
             "reason_template": "Subtracts both b and c from a.",
         },
         {"expression": "a + b", "reason_template": "Omits the final subtraction of c."},
+        {
+            "expression": "a * b - c",
+            "reason_template": "Multiplies a and b before subtracting c.",
+        },
+        {
+            "expression": "b - c",
+            "reason_template": "Subtracts c from b without adding a.",
+        },
+        {
+            "expression": "c - (a + b)",
+            "reason_template": "Reverses the order of the final subtraction.",
+        },
     ],
     "question_type": "mcq",
 }
@@ -206,9 +218,12 @@ def proposal() -> CodeTemplateProposal:
 
 
 def math_proposal() -> MathTemplateContent:
-    return MathTemplateContent.model_validate(
+    proposal = MathTemplateContent.model_validate(
         {key: MATH_CANDIDATE[key] for key in MATH_PROPOSAL_FIELDS}
     )
+    assert proposal.item is not None
+    proposal.item.body.distractors *= 2
+    return proposal
 
 
 class StubRequest(BaseModel):

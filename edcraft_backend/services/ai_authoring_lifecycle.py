@@ -142,6 +142,9 @@ class AuthoringLifecycle:
             if not tasks:
                 return
             await asyncio.gather(*tasks, return_exceptions=True)
+            # A gather of finished tasks can return before their callbacks run.
+            self._tasks.difference_update(tasks)
+            self._background_tasks.difference_update(tasks)
 
     async def shutdown(self, timeout: float) -> None:
         """Stop admitting work and wait up to ``timeout`` for existing tasks."""

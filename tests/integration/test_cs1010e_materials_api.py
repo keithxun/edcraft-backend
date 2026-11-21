@@ -1,7 +1,10 @@
 """HTTP tests for the materials-to-practice pilot."""
 
+import hashlib
+import json
 import shutil
 from collections.abc import AsyncIterator
+from pathlib import Path
 from tempfile import SpooledTemporaryFile
 from uuid import uuid4
 
@@ -12,9 +15,7 @@ from starlette import formparsers
 from edcraft_backend.dependencies import get_current_user
 from edcraft_backend.main import app
 from edcraft_backend.models.user import User
-from edcraft_backend.services import cs1010e_practice, material_pdf
-from edcraft_backend.services.ai_domains import LIBRARY_REVISION
-from edcraft_backend.services.cs1010e.functions import MAX_OUTLINE
+from edcraft_backend.services import material_pdf
 
 MATERIALS_URL = "/ai-authoring/materials"
 EXCERPTS = {
@@ -102,6 +103,22 @@ async def test_pdf_upload_rejects_other_file_content(materials_client: AsyncClie
     assert response.status_code == 415, response.text
 
 
+async def test_pdf_upload_reports_unavailable_extractor(
+    materials_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("PATH", str(tmp_path))
+    pdf = sample_pdf("BT /F1 12 Tf 72 720 Td (Lecture note) Tj ET")
+
+    response = await materials_client.post(
+        f"{MATERIALS_URL}/pages", files={"file": ("material.pdf", pdf, "application/pdf")}
+    )
+
+    assert response.status_code == 503, response.text
+    assert response.json()["detail"] == "PDF text extraction is unavailable."
+
+
 async def test_pdf_upload_requires_authentication() -> None:
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post(
@@ -154,68 +171,21 @@ async def test_pdf_without_readable_pages_returns_an_error(
     assert response.status_code == 422, response.text
 
 
-async def test_propose_and_generate_replay_one_supported_task(
-    materials_client: AsyncClient,
-) -> None:
-    proposed = await materials_client.post(f"{MATERIALS_URL}/propose", json=EXCERPTS)
-    assert proposed.status_code == 200, proposed.text
-    result = proposed.json()
-    assert result["family"] == "nested-loops"
-    assert result["task"]
-    assert result["alternatives"] == []
-
-    payload = {**EXCERPTS, "family": result["family"], "seed": 42}
-    generated = await materials_client.post(f"{MATERIALS_URL}/generate", json=payload)
-    replay = await materials_client.post(f"{MATERIALS_URL}/generate", json=payload)
-    assert generated.status_code == 200, generated.text
-    batch = generated.json()
-    assert batch == replay.json()
-    assert batch["seed"] == 42
-    assert batch["generator_version"] == cs1010e_practice.VERSION
-    assert len(batch["questions"]) == 5
-    for question in batch["questions"]:
-        assert question["stem"] and question["explanation"]
-        assert len(set(question["options"])) == 4
-        assert 0 <= question["correct_index"] < len(question["options"])
+def legacy_receipt(body):
+    """Reproduce the original saved batch receipt for a historical request fixture."""
+    concrete = {"sources": [], "topic": "", "exam": "", **body}
+    concrete.pop("seed")
+    snapshot = json.dumps(concrete, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return {**body, "input_sha256": hashlib.sha256(snapshot.encode()).hexdigest()}
 
 
-async def test_propose_exposes_the_lecture_reduction_as_an_alternate_task(
-    materials_client: AsyncClient,
-) -> None:
-    lecture = """Draw the trace tree for this recursion:
-int study(int x, int y) {
-    int mid;
-    if (x == y) return x*x;
-    else { mid=(x+y)/2; return study(x,mid) + study(mid+1,y); }
-}"""
-    exam = "What integer is printed by this code fragment?\n" + MAX_OUTLINE
-    excerpts = {"lecture": lecture, "exam": exam}
-    proposed = await materials_client.post(f"{MATERIALS_URL}/propose", json=excerpts)
-    assert proposed.status_code == 200, proposed.text
-    result = proposed.json()
-    assert result["family"] == "recursive-max"
-    (alternate,) = result["alternatives"]
-    assert alternate["family"] == "recursive-square-sum"
-    assert alternate["task"] and alternate["reason"]
-
-    generated = await materials_client.post(
-        f"{MATERIALS_URL}/generate", json={**excerpts, "family": alternate["family"], "seed": 11}
-    )
-    assert generated.status_code == 200, generated.text
-    assert len(generated.json()["questions"]) == 5
-
-
-async def test_generation_rechecks_current_excerpts(materials_client: AsyncClient) -> None:
-    excerpts = {**EXCERPTS, "lecture": "Declaring a pointer with the star operator."}
-    proposed = await materials_client.post(f"{MATERIALS_URL}/propose", json=excerpts)
-    assert proposed.status_code == 200, proposed.text
-    assert proposed.json()["family"] is None
-    assert proposed.json()["reason"]
-    assert proposed.json()["alternatives"] == []
-
-    payload = {**excerpts, "family": "nested-loops", "seed": 42}
-    generated = await materials_client.post(f"{MATERIALS_URL}/generate", json=payload)
-    assert generated.status_code == 422, generated.text
+async def test_new_uploads_use_checked_authoring_jobs(materials_client: AsyncClient):
+    old = await materials_client.post(f"{MATERIALS_URL}/propose", json=EXCERPTS)
+    assert old.status_code == 410
+    body = {**EXCERPTS, "family": "nested-loops", "seed": 42}
+    old = await materials_client.post(f"{MATERIALS_URL}/generate", json=body)
+    assert old.status_code == 410
+    assert "Authoring job" in old.json()["detail"]
 
 
 @pytest.mark.parametrize("action", ["propose", "generate"])
@@ -255,137 +225,7 @@ async def test_generic_retrieval_respects_selected_pages_and_collection(
     assert missing.status_code == 422
 
 
-async def test_lecture_only_can_generate_but_rechecks_topic(materials_client: AsyncClient):
-    pair = {
-        "lecture": (
-            "Nested loops: for (int i=0; i<3; i++) the outer loop restarts "
-            "the inner loop. printf prints the result."
-        ),
-        "topic": "nested loops",
-    }
-    result = await materials_client.post(f"{MATERIALS_URL}/propose", json=pair)
-    assert result.status_code == 200
-    assert result.json()["family"] == "nested-loops"
-    request = {**pair, "family": "nested-loops", "seed": 23}
-    batch = await materials_client.post(f"{MATERIALS_URL}/generate", json=request)
-    assert len(batch.json()["questions"]) == 5
-    mismatch = await materials_client.post(
-        f"{MATERIALS_URL}/generate", json={**request, "topic": "gene expression"}
-    )
-    assert mismatch.status_code == 422
-
-
-async def test_unrelated_module_can_use_its_own_explicit_table(materials_client: AsyncClient):
-    pair = {
-        "lecture": (
-            "Moon | Planet\n--- | ---\nIo | Jupiter\nTitan | Saturn\n"
-            "Triton | Neptune\nPhobos | Mars\nMiranda | Uranus"
-        ),
-        "topic": "Moon and planet",
-    }
-    result = await materials_client.post(f"{MATERIALS_URL}/propose", json=pair)
-    assert result.json()["family"] == "table-lookup"
-    request = {**pair, "family": "table-lookup", "seed": 987}
-    result = await materials_client.post(f"{MATERIALS_URL}/generate", json=request)
-    assert len({q["stem"] for q in result.json()["questions"]}) == 5
-    for q in result.json()["questions"]:
-        expected = q["options"][q["correct_index"]]
-        assert expected in pair["lecture"]
-    # An exam asking for an explanation cannot be answered by looking up a named cell.
-    other = await materials_client.post(
-        f"{MATERIALS_URL}/propose", json={**pair, "exam": "Explain how orbital resonances develop."}
-    )
-    assert other.json()["family"] is None
-
-
-async def test_evidence_receipt_tracks_edits_and_replay(materials_client: AsyncClient) -> None:
-    refs = [
-        {"document": "lecture.pdf", "page": 2, "role": "lecture", "edited": False},
-        {"document": "paper.pdf", "page": 5, "role": "exam", "edited": False},
-    ]
-    body = {**EXCERPTS, "seed": 33, "family": "nested-loops", "sources": refs}
-    first = await materials_client.post(f"{MATERIALS_URL}/generate", json=body)
-    assert first.status_code == 200 and first.json()["sources"] == refs
-    assert len(first.json()["input_sha256"]) == 64
-    assert first.json()["validator_revision"] == LIBRARY_REVISION
-    corrected = await materials_client.post(
-        f"{MATERIALS_URL}/generate",
-        json={
-            **body,
-            "lecture": EXCERPTS["lecture"] + " One correction.",
-            "sources": [{**refs[0], "edited": True}, refs[1]],
-        },
-    )
-    assert corrected.json()["input_sha256"] != first.json()["input_sha256"]
-    assert (
-        first.json() == (await materials_client.post(f"{MATERIALS_URL}/generate", json=body)).json()
-    )
-
-
-@pytest.mark.skipif(shutil.which("pdftotext") is None, reason="Poppler is required")
-async def test_uploaded_glossary_uses_generic_workflow(materials_client: AsyncClient) -> None:
-    lines = [
-        "Thermodynamics glossary",
-        "Isobaric: A process that takes place at constant pressure.",
-        "Isochoric: A process that takes place at constant volume.",
-        "Isothermal: A process that takes place at constant temperature.",
-        "Adiabatic: A process in which no heat is exchanged.",
-        "Reversible: An ideal process that can be reversed without net change.",
-    ]
-    stream = "BT /F1 9 Tf 60 760 Td " + " 0 -13 Td ".join(f"({s}) Tj" for s in lines) + " ET"
-    response = await materials_client.post(
-        f"{MATERIALS_URL}/pages",
-        files={"file": ("course.pdf", sample_pdf(stream), "application/pdf")},
-    )
-    assert response.status_code == 200
-    page = {"document": "course.pdf", "page": 1, "text": response.json()["pages"][0]}
-    retrieved = await materials_client.post(
-        f"{MATERIALS_URL}/retrieve",
-        json={"pages": [page], "topic": "thermodynamics", "strategy": "keyword"},
-    )
-    lecture = retrieved.json()["evidence"][0]["text"]
-    inputs = {"lecture": lecture, "topic": "thermodynamics"}
-    proposed = await materials_client.post(f"{MATERIALS_URL}/propose", json=inputs)
-    assert proposed.json()["family"] == "glossary-term"
-    batch = await materials_client.post(
-        f"{MATERIALS_URL}/generate", json={**inputs, "family": "glossary-term", "seed": 3}
-    )
-    assert batch.status_code == 200
-    for q in batch.json()["questions"]:
-        term = q["options"][q["correct_index"]]
-        assert (
-            next(line.split(": ", 1)[1] for line in lines if line.startswith(term + ":"))
-            in q["stem"]
-        )
-
-
-async def test_selected_domain_scopes_proposal_generation_and_receipt(
-    materials_client: AsyncClient,
-):
-    proposal = await materials_client.post(
-        f"{MATERIALS_URL}/propose", json={**EXCERPTS, "domain": "math"}
-    )
-    assert proposal.status_code == 200 and proposal.json()["family"] is None
-    request = {**EXCERPTS, "seed": 5, "family": "nested-loops"}
-    automatic = await materials_client.post(f"{MATERIALS_URL}/generate", json=request)
-    explicit = await materials_client.post(
-        f"{MATERIALS_URL}/generate", json={**request, "domain": "code"}
-    )
-    assert automatic.status_code == explicit.status_code == 200
-    assert automatic.json()["questions"] == explicit.json()["questions"]
-    assert explicit.json()["input_sha256"] != automatic.json()["input_sha256"]
-    assert (
-        await materials_client.post(f"{MATERIALS_URL}/generate", json={**request, "domain": "math"})
-    ).status_code == 422
-
-
-async def test_disabled_material_domain_is_rejected_even_in_auto_mode(
-    materials_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
-):
-    monkeypatch.setenv("AI_AUTHORING_ENABLED_DOMAINS", "math")
-    explicit = await materials_client.post(
-        f"{MATERIALS_URL}/propose", json={**EXCERPTS, "domain": "code"}
-    )
-    assert explicit.status_code == 422
-    auto = await materials_client.post(f"{MATERIALS_URL}/propose", json=EXCERPTS)
-    assert auto.status_code == 200 and auto.json()["family"] is None
+async def test_public_digest_cannot_enable_retired_generator(materials_client: AsyncClient):
+    payload = legacy_receipt({**EXCERPTS, "family": "nested-loops", "seed": 42})
+    response = await materials_client.post(f"{MATERIALS_URL}/generate", json=payload)
+    assert response.status_code == 410

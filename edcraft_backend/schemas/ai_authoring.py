@@ -19,6 +19,7 @@ from edcraft_validator.domain_types import (
     MIN_DISTRACTORS,
     Difficulty,
 )
+from edcraft_validator.domains.authoring_materials import AuthoringMaterials
 from edcraft_validator.domains.domain_support import ReviewCasePreview
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -114,6 +115,7 @@ class SubmitAuthoringJobRequest(AuthoringModelSelection):
     domain: str = "code"
     prompt: str = Field(min_length=1, max_length=4000)
     difficulty: Difficulty
+    materials: AuthoringMaterials | None = None
     num_distractors: DistractorCount = DEFAULT_DISTRACTORS
     judges: AuthoringJudgeSelections | None = None
 
@@ -200,6 +202,7 @@ class AuthoringRequestView(BaseModel):
 
     prompt: str
     difficulty: Difficulty
+    materials: AuthoringMaterials | None = None
     num_distractors: DistractorCount
     domain: str
     model_profile: str | None = None
