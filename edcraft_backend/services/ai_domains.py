@@ -5,7 +5,7 @@ import os
 from edcraft_validator.domains.domain_registry import available_domains
 
 # Source commit of the validator wheel distributed with this backend.
-LIBRARY_REVISION = "8512b16fa6ffe9554f60df92c63bf0db3a9a41c5"
+LIBRARY_REVISION = "f9478f80b5e174881b4a65fa657d25074bb7aafc"
 
 ENABLED_DOMAINS_ENV = "AI_AUTHORING_ENABLED_DOMAINS"
 DEFAULT_ENABLED_DOMAINS = ("code", "math", "biology", "chemistry", "physics")

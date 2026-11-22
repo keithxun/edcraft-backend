@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from inspect import iscoroutinefunction
@@ -128,7 +129,9 @@ class AiAuthoringService:
         )
 
     def _configured_judge(self) -> JudgeSettings | None:
-        """Load the server-configured advisory judge, or None when invalid."""
+        """Use a deployment relevance override only when it names a model."""
+        if not os.environ.get("EDCRAFT_JUDGE_MODEL", "").strip():
+            return None
         try:
             return load_judge_settings()
         except (ValueError, ValidationError):

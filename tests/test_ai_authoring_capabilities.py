@@ -17,11 +17,15 @@ from edcraft_backend.services.provider_endpoint import ResolvedConnection
 
 
 @pytest.mark.asyncio
-async def test_submit_defaults_relevance_to_the_configured_judge(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("configured", [True, False])
+async def test_submit_uses_only_an_explicit_relevance_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, configured: bool
 ) -> None:
     monkeypatch.setenv("EDCRAFT_JUDGE_PROVIDER", "soclaas")
-    monkeypatch.setenv("EDCRAFT_JUDGE_MODEL", "x-test-3")
+    if configured:
+        monkeypatch.setenv("EDCRAFT_JUDGE_MODEL", "x-test-3")
+    else:
+        monkeypatch.delenv("EDCRAFT_JUDGE_MODEL", raising=False)
     settings = AuthoringSettings(storage_dir=tmp_path / "authoring")
     service = AiAuthoringService(settings, store=AuthoringStore(settings))
     author = ResolvedConnection.for_judge(provider="openai", model="gpt-5-mini")
@@ -48,15 +52,18 @@ async def test_submit_defaults_relevance_to_the_configured_judge(
         ),
     )
 
-    assert captured["judge_default"] == ResolvedConnection.for_judge(
-        provider="soclaas", model="x-test-3"
+    expected = (
+        ResolvedConnection.for_judge(provider="soclaas", model="x-test-3") if configured else None
     )
+    assert captured["judge_default"] == expected
+    assert ((await service.capabilities()).judge is not None) == configured
 
 
 def test_an_invalid_configured_judge_yields_no_default(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("EDCRAFT_JUDGE_PROVIDER", "not-a-provider")
+    monkeypatch.setenv("EDCRAFT_JUDGE_MODEL", "x-test-3")
     settings = AuthoringSettings(storage_dir=tmp_path / "authoring")
     service = AiAuthoringService(settings, store=AuthoringStore(settings))
 

@@ -218,6 +218,13 @@ preserves the reviewed request, exact artifact and report bytes, their hashes,
 the teacher's decision, and seeded generation metadata. Apply Alembic migrations
 before starting the API.
 
+Difficulty and relevance inherit the selected question model and its connection.
+Teachers can choose a different model for either check in Advanced settings.
+Setting `EDCRAFT_JUDGE_MODEL` explicitly supplies a deployment default for
+relevance alone. The teacher's selection takes precedence. The SoCLaaS
+`x-test-2` difficulty check uses low reasoning effort when its first
+classification needs a follow-up assessment.
+
 The default `AUTHORING_EXECUTOR=inline` runs the validator locally. Set
 `AUTHORING_EXECUTOR=nomad` to schedule one pinned authoring worker per attempt.
 Both modes use database-backed admission. With the default settings at most four

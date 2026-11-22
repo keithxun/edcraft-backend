@@ -397,6 +397,7 @@ async def test_worker_context_preserves_an_unconfigured_advisory_role(
 ) -> None:
     sessions, (owner, *_rest) = dispatch_db
     monkeypatch.setenv("EDCRAFT_JUDGE_PROVIDER", "soclaas")
+    monkeypatch.setenv("EDCRAFT_JUDGE_MODEL", "x-test-3")
     monkeypatch.delenv("SOCLAAS_API_KEY", raising=False)
     service = replica(sessions, simulation)
     job = await service.submit(owner, _SUBMISSION.model_copy(update={"judges": None}))

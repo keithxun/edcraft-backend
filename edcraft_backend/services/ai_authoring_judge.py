@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from edcraft_validator.llm.decision import ConfiguredDecisionProvider
-from edcraft_validator.llm.judge_configuration import JudgeSettings, load_judge_settings
+from edcraft_validator.llm.judge_configuration import JudgeSettings, judge_settings_for
 from edcraft_validator.llm.llm_contracts import ModelProvider, supports_decisions
 from edcraft_validator.llm.provider_registry import create_model_provider
 from edcraft_validator.mcp.client import FastMcpToolClient
@@ -25,13 +25,6 @@ class SelectedModelDecisionProvider(ConfiguredDecisionProvider):
         self.model = provider.model
         self.threshold = settings.relevance_threshold
         self.served_model = None
-
-
-def judge_settings_for(provider: str, model: str) -> JudgeSettings:
-    """Keep server thresholds and reasoning effort while replacing the model."""
-    return load_judge_settings().model_copy(
-        update={"provider": provider, "model": model}
-    )
 
 
 def build_plan_provider(role: ResolvedConnection) -> ModelProvider:

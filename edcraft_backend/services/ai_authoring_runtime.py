@@ -85,8 +85,8 @@ class JobRuntime:
 
         ``judge_default`` is the server-configured advisory judge used when the
         request does not override relevance. It is separate from the author
-        because a decision judge needs token probabilities, which not every
-        author model exposes.
+        only when the deployment explicitly configures it. Otherwise both
+        advisory checks inherit the author's connection and model.
         """
         author = cls._author_role(
             request, profile_lookup=profile_lookup, connection=author_connection

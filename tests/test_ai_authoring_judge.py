@@ -82,6 +82,7 @@ def test_managed_provider_rejects_delegates_without_decisions() -> None:
 
 
 def test_judge_settings_for_keeps_server_thresholds(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EDCRAFT_JUDGE_MODEL", "")
     monkeypatch.setenv("EDCRAFT_RELEVANCE_THRESHOLD", "0.75")
     monkeypatch.setenv("EDCRAFT_JUDGE_REASONING_EFFORT", "high")
 

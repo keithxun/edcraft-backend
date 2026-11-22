@@ -561,11 +561,13 @@ async def test_submit_keeps_legacy_profile_path_working(
         assert command.author.model == "stub-model"
 
 
-async def test_judges_use_the_role_defaults_when_not_selected(
+async def test_both_judges_inherit_the_author_when_not_selected(
     test_client: AsyncClient,
     user: User,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.delenv("EDCRAFT_JUDGE_MODEL", raising=False)
     executor = StaticExecutor(lambda command: make_checked_report(command))
 
     async with authoring_env(tmp_path, executor) as service:
@@ -583,9 +585,7 @@ async def test_judges_use_the_role_defaults_when_not_selected(
 
         runtime = executor.runtimes[0]
         assert runtime.difficulty == runtime.author
-        assert runtime.relevance == ResolvedConnection.for_judge(
-            provider="soclaas", model="x-test-3"
-        )
+        assert runtime.relevance == runtime.author
         stored = await service.get_job(user.id, job_id)
         assert stored.request.judges is None
 
@@ -658,7 +658,9 @@ async def test_judge_can_use_a_server_profile_while_author_uses_a_connection(
     test_client: AsyncClient,
     user: User,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.delenv("EDCRAFT_JUDGE_MODEL", raising=False)
     created = await create_connection(test_client)
     executor = StaticExecutor(lambda command: make_checked_report(command))
 
@@ -682,9 +684,7 @@ async def test_judge_can_use_a_server_profile_while_author_uses_a_connection(
         assert runtime.difficulty.selection.provider == "stub"
         assert runtime.difficulty.selection.model == "stub-model"
         assert runtime.difficulty.is_byok is False
-        assert runtime.relevance == ResolvedConnection.for_judge(
-            provider="soclaas", model="x-test-3"
-        )
+        assert runtime.relevance == runtime.author
 
 
 async def test_submit_rejects_unknown_disabled_or_mixed_judge_selections(

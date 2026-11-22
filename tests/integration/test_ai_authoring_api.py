@@ -211,7 +211,10 @@ async def test_all_authoring_endpoints_require_sign_in(
 
 
 @pytest.mark.asyncio
-async def test_capabilities_are_safe_and_server_configured(checked_env: AuthoringHarness) -> None:
+async def test_capabilities_are_safe_and_server_configured(
+    checked_env: AuthoringHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("EDCRAFT_JUDGE_MODEL", raising=False)
     response = await checked_env.client.get("/ai-authoring/capabilities")
     assert response.status_code == 200
     body = response.json()
@@ -232,8 +235,7 @@ async def test_capabilities_are_safe_and_server_configured(checked_env: Authorin
     assert body["min_distractors"] == 1
     assert body["max_distractors"] == 10
     assert body["default_distractors"] == 3
-    assert body["judge"]["provider"]
-    assert body["judge"]["model"]
+    assert body["judge"] is None
     assert "api_key" not in response.text
     assert "http" not in response.text
 

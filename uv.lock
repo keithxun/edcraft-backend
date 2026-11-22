@@ -560,7 +560,7 @@ requires-dist = [
     { name = "asyncpg", specifier = ">=0.31.0" },
     { name = "authlib", specifier = ">=1.3.0" },
     { name = "edcraft-engine", git = "https://github.com/edcraft-org/edcraft-engine.git" },
-    { name = "edcraft-validator", path = "vendor/8512b16fa6ffe9554f60df92c63bf0db3a9a41c5/edcraft_validator-0.1.0-py3-none-any.whl" },
+    { name = "edcraft-validator", path = "vendor/f9478f80b5e174881b4a65fa657d25074bb7aafc/edcraft_validator-0.1.0-py3-none-any.whl" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.125.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "itsdangerous", specifier = ">=2.2.0" },
@@ -600,7 +600,7 @@ dependencies = [
 [[package]]
 name = "edcraft-validator"
 version = "0.1.0"
-source = { path = "vendor/8512b16fa6ffe9554f60df92c63bf0db3a9a41c5/edcraft_validator-0.1.0-py3-none-any.whl" }
+source = { path = "vendor/f9478f80b5e174881b4a65fa657d25074bb7aafc/edcraft_validator-0.1.0-py3-none-any.whl" }
 dependencies = [
     { name = "fastmcp" },
     { name = "httpx" },
@@ -613,7 +613,7 @@ dependencies = [
     { name = "sympy" },
 ]
 wheels = [
-    { filename = "edcraft_validator-0.1.0-py3-none-any.whl", hash = "sha256:90d6aeb8a238fabc5e83057ccc609ea2491d950f56bc4ae246cfdc8d7017d994" },
+    { filename = "edcraft_validator-0.1.0-py3-none-any.whl", hash = "sha256:51795fd90f078662e021026244fd85122b59cc4c1e167e53a890818f96462a7f" },
 ]
 
 [package.metadata]
