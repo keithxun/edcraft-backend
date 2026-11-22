@@ -47,6 +47,7 @@ from edcraft_backend.services.ai_authoring_lifecycle import AdmissionLease
 from edcraft_backend.services.ai_authoring_service import AiAuthoringService
 from edcraft_backend.services.ai_authoring_store import (
     AuthoringRequestRecord,
+    AuthoringStore,
     StoredJob,
 )
 from edcraft_backend.services.ai_domains import ENABLED_DOMAINS_ENV
@@ -81,6 +82,11 @@ class AuthoringHarness:
     user: FakeUser
     executor: Any
 
+    @property
+    def store(self) -> AuthoringStore:
+        assert isinstance(self.service.store, AuthoringStore)
+        return self.service.store
+
 
 class NoConnections:
     """Connection service stub for authoring tests without a database."""
@@ -112,7 +118,7 @@ async def env_for(
         shutdown_timeout_seconds=1.0,
         job_timeout_seconds=job_timeout_seconds,
     )
-    service = AiAuthoringService(settings, executor=executor)
+    service = AiAuthoringService(settings, store=AuthoringStore(settings), executor=executor)
     await service.startup()
     user = FakeUser(uuid4())
 
@@ -669,7 +675,9 @@ async def test_stub_domain_survives_a_service_restart(tmp_path: Path, stub_domai
         shutdown_timeout_seconds=1.0,
     )
     owner = uuid4()
-    first = AiAuthoringService(settings, executor=StaticExecutor(make_stub_checked_report))
+    first = AiAuthoringService(
+        settings, store=AuthoringStore(settings), executor=StaticExecutor(make_stub_checked_report)
+    )
     await first.startup()
     try:
         submitted = await first.submit(
@@ -696,7 +704,9 @@ async def test_stub_domain_survives_a_service_restart(tmp_path: Path, stub_domai
     finally:
         await first.shutdown(0.5)
 
-    second = AiAuthoringService(settings, executor=StaticExecutor(make_stub_checked_report))
+    second = AiAuthoringService(
+        settings, store=AuthoringStore(settings), executor=StaticExecutor(make_stub_checked_report)
+    )
     await second.startup()
     try:
         reloaded = await second.review(owner, submitted.job_id)
@@ -861,7 +871,7 @@ async def test_tampered_artifact_is_rejected_everywhere(checked_env: AuthoringHa
     env = checked_env
     job_id = await complete_job(env)
     envelope = await review(env, job_id)
-    artifact_path = env.service.store.root / "artifacts" / str(job_id) / "artifact.json"
+    artifact_path = env.store.root / "artifacts" / str(job_id) / "artifact.json"
     artifact_path.write_bytes(b'{"tampered":true}')
 
     assert (await env.client.get(f"/ai-authoring/jobs/{job_id}/review")).status_code == 409
@@ -892,7 +902,7 @@ async def test_damaged_review_report_fails_closed_everywhere(
     digest = envelope["artifact_sha256"]
     assert (await approve(env, job_id, digest)).status_code == 200
 
-    report_path = env.service.store.root / "artifacts" / str(job_id) / "report.json"
+    report_path = env.store.root / "artifacts" / str(job_id) / "report.json"
     if damage == "missing":
         report_path.unlink()
     else:
@@ -925,7 +935,7 @@ async def test_generation_rechecks_revoked_approval_under_store_lock(
     digest = envelope["artifact_sha256"]
     assert (await approve(env, job_id, digest)).status_code == 200
 
-    original_read_artifact = env.service.store.read_artifact
+    original_read_artifact = env.store.read_artifact
     entered = threading.Event()
     release = threading.Event()
 
@@ -936,7 +946,7 @@ async def test_generation_rechecks_revoked_approval_under_store_lock(
                 raise RuntimeError("test generate gate timed out")
         return original_read_artifact(target_job_id)
 
-    env.service.store.read_artifact = gated_read_artifact  # type: ignore[assignment]
+    env.store.read_artifact = gated_read_artifact  # type: ignore[assignment]
     try:
         generating = asyncio.create_task(
             env.client.post(
@@ -969,7 +979,7 @@ async def test_non_default_distractor_count_is_accepted_and_stored(
     assert response.status_code == 202, response.text
 
     job_id = UUID(response.json()["job_id"])
-    stored = checked_env.service.store.get_job(job_id)
+    stored = checked_env.store.get_job(job_id)
     assert stored.request.num_distractors == 7
 
 
@@ -1121,7 +1131,7 @@ async def test_cancelled_submit_keeps_a_worker_and_releases_its_slot(tmp_path: P
         StaticExecutor(lambda command: make_checked_report(command)),
         max_queue=0,
     ) as env:
-        original_create_job = env.service.store.create_job
+        original_create_job = env.store.create_job
 
         def blocked_create_job(job: StoredJob) -> StoredJob:
             entered.set()
@@ -1129,7 +1139,7 @@ async def test_cancelled_submit_keeps_a_worker_and_releases_its_slot(tmp_path: P
                 raise RuntimeError("test create_job gate timed out")
             return original_create_job(job)
 
-        env.service.store.create_job = blocked_create_job  # type: ignore[method-assign]
+        env.store.create_job = blocked_create_job  # type: ignore[method-assign]
         request = SubmitAuthoringJobRequest(
             prompt="Cancel while the queued job is being persisted",
             difficulty="easy",
@@ -1145,10 +1155,10 @@ async def test_cancelled_submit_keeps_a_worker_and_releases_its_slot(tmp_path: P
         release.set()
         with pytest.raises(asyncio.CancelledError):
             await submission
-        env.service.store.create_job = original_create_job  # type: ignore[method-assign]
+        env.store.create_job = original_create_job  # type: ignore[method-assign]
 
         await env.service.wait_for_idle()
-        jobs = env.service.store.list_jobs(env.user.id)
+        jobs = env.store.list_jobs(env.user.id)
         assert len(jobs) == 1
         assert jobs[0].state == "completed"
 
@@ -1164,7 +1174,7 @@ async def test_cancelled_submit_keeps_a_worker_and_releases_its_slot(tmp_path: P
             ),
         )
         await env.service.wait_for_idle()
-        assert env.service.store.get_job(follower.job_id).state == "completed"
+        assert env.store.get_job(follower.job_id).state == "completed"
 
 
 @pytest.mark.asyncio
@@ -1177,7 +1187,7 @@ async def test_second_cancellation_still_schedules_and_frees_slot(tmp_path: Path
         StaticExecutor(lambda command: make_checked_report(command)),
         max_queue=0,
     ) as env:
-        original_create_job = env.service.store.create_job
+        original_create_job = env.store.create_job
 
         def blocked_create_job(job: StoredJob) -> StoredJob:
             entered.set()
@@ -1185,7 +1195,7 @@ async def test_second_cancellation_still_schedules_and_frees_slot(tmp_path: Path
                 raise RuntimeError("test create_job gate timed out")
             return original_create_job(job)
 
-        env.service.store.create_job = blocked_create_job  # type: ignore[method-assign]
+        env.store.create_job = blocked_create_job  # type: ignore[method-assign]
         request = SubmitAuthoringJobRequest(
             prompt="Cancel twice while the queued job is being persisted",
             difficulty="easy",
@@ -1202,10 +1212,10 @@ async def test_second_cancellation_still_schedules_and_frees_slot(tmp_path: Path
         release.set()
         with pytest.raises(asyncio.CancelledError):
             await submission
-        env.service.store.create_job = original_create_job  # type: ignore[method-assign]
+        env.store.create_job = original_create_job  # type: ignore[method-assign]
 
         await env.service.wait_for_idle()
-        jobs = env.service.store.list_jobs(env.user.id)
+        jobs = env.store.list_jobs(env.user.id)
         assert len(jobs) == 1
         assert jobs[0].state == "completed"
 
@@ -1222,7 +1232,7 @@ async def test_second_cancellation_still_schedules_and_frees_slot(tmp_path: Path
             ),
         )
         await env.service.wait_for_idle()
-        assert env.service.store.get_job(follower.job_id).state == "completed"
+        assert env.store.get_job(follower.job_id).state == "completed"
 
 
 @pytest.mark.asyncio
@@ -1232,12 +1242,12 @@ async def test_create_job_failure_releases_the_admission_slot(tmp_path: Path) ->
         StaticExecutor(lambda command: make_checked_report(command)),
         max_queue=0,
     ) as env:
-        original_create_job = env.service.store.create_job
+        original_create_job = env.store.create_job
 
         def broken_create_job(job: StoredJob) -> StoredJob:
             raise RuntimeError("storage is full")
 
-        env.service.store.create_job = broken_create_job  # type: ignore[method-assign]
+        env.store.create_job = broken_create_job  # type: ignore[method-assign]
         with pytest.raises(RuntimeError, match="storage is full"):
             await env.service.submit(
                 env.user.id,
@@ -1248,7 +1258,7 @@ async def test_create_job_failure_releases_the_admission_slot(tmp_path: Path) ->
                     model_profile="test-profile",
                 ),
             )
-        env.service.store.create_job = original_create_job  # type: ignore[method-assign]
+        env.store.create_job = original_create_job  # type: ignore[method-assign]
 
         follower = await env.service.submit(
             env.user.id,
@@ -1260,7 +1270,7 @@ async def test_create_job_failure_releases_the_admission_slot(tmp_path: Path) ->
             ),
         )
         await env.service.wait_for_idle()
-        assert env.service.store.get_job(follower.job_id).state == "completed"
+        assert env.store.get_job(follower.job_id).state == "completed"
 
 
 @pytest.mark.asyncio
@@ -1290,7 +1300,7 @@ async def test_schedule_failure_marks_the_job_failed_and_frees_the_slot(
             )
         env.service.lifecycle._start_job = original_start_job  # type: ignore[method-assign]
 
-        jobs = env.service.store.list_jobs(env.user.id)
+        jobs = env.store.list_jobs(env.user.id)
         assert len(jobs) == 1
         assert jobs[0].state == "failed"
         assert jobs[0].error is not None
@@ -1306,7 +1316,7 @@ async def test_schedule_failure_marks_the_job_failed_and_frees_the_slot(
             ),
         )
         await env.service.wait_for_idle()
-        assert env.service.store.get_job(follower.job_id).state == "completed"
+        assert env.store.get_job(follower.job_id).state == "completed"
 
 
 @pytest.mark.asyncio
@@ -1367,9 +1377,9 @@ async def test_per_user_limits_keep_capacity_for_other_users(tmp_path: Path) -> 
 
         release.set()
         await env.service.wait_for_idle()
-        assert env.service.store.get_owned_job(first, owner_a).state == "completed"
-        assert env.service.store.get_owned_job(second, owner_a).state == "completed"
-        assert env.service.store.get_owned_job(third, owner_b).state == "completed"
+        assert env.store.get_owned_job(first, owner_a).state == "completed"
+        assert env.store.get_owned_job(second, owner_a).state == "completed"
+        assert env.store.get_owned_job(third, owner_b).state == "completed"
 
 
 @pytest.mark.asyncio
@@ -1530,7 +1540,7 @@ async def test_job_keeps_reviewed_upload_separate_from_the_teacher_prompt(tmp_pa
             check["tool"] == "application_material_variants" and check["status"] == "passed"
             for check in envelope["checks"]
         )
-        saved = env.service.store.read_artifact(job_id)
+        saved = env.store.read_artifact(job_id)
         assert "application_material_variants" in saved.decode()
         digest = envelope["artifact_sha256"]
         assert (await approve(env, job_id, digest)).status_code == 200

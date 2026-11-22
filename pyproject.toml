@@ -17,7 +17,6 @@ dependencies = [
     "jinja2>=3.1.6",
     "numpy>=1.26,<3",
     "onnxruntime>=1.22,<2",
-    "pycparser>=3.0,<4",
     "pydantic-settings>=2.7.0",
     "pymustache>=0.3",
     "python-dotenv>=1.2.1",
@@ -29,7 +28,7 @@ dependencies = [
 
 [tool.uv.sources]
 edcraft-engine = { git = "https://github.com/edcraft-org/edcraft-engine.git" }
-edcraft-validator = { path = "vendor/fab2c8a1f867b7c44147dab7cf3e590e94af69ca/edcraft_validator-0.1.0-py3-none-any.whl" }
+edcraft-validator = { path = "vendor/8512b16fa6ffe9554f60df92c63bf0db3a9a41c5/edcraft_validator-0.1.0-py3-none-any.whl" }
 step-tracer = { git = "https://github.com/edcraft-org/step-tracer.git", rev = "ab7e22ef18b776a9cbd5260bef4b4eeacc17db11" }
 
 [tool.uv]

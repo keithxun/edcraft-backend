@@ -28,11 +28,12 @@ FROM python:3.12-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
     poppler-utils \
+    procps \
     && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user and writable durable AI authoring directory
+# Create a non-root runtime with a writable material embedding cache
 RUN useradd -m -u 1000 edcraft && \
-    mkdir -p /app/.data/authoring && \
+    mkdir -p /app/.data/material-embedding && \
     chown -R edcraft:edcraft /app
 
 # Set working directory
@@ -43,9 +44,6 @@ COPY --from=builder --chown=edcraft:edcraft /app/.venv /app/.venv
 
 # Add venv to PATH so we can use installed executables
 ENV PATH="/app/.venv/bin:$PATH"
-
-# Durable AI authoring state (mounted as a volume in docker-compose)
-ENV AUTHORING_STORAGE_DIR=/app/.data/authoring
 
 # Copy application code
 COPY --chown=edcraft:edcraft pyproject.toml ./

@@ -1,6 +1,7 @@
 """Tests for configuration module."""
 
 import pytest
+from pydantic import ValidationError
 
 from edcraft_backend.config import Environment, Settings, get_project_root, get_settings
 
@@ -50,6 +51,82 @@ def test_settings_production(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.app.env == Environment.PRODUCTION
     assert settings.is_production is True
     assert settings.is_development is False
+
+
+@pytest.mark.parametrize(
+    ("executor", "override", "fallback"),
+    [
+        ("nomad", "", "http://api.test"),
+        ("nomad", "http://api.test", "https://api.test"),
+        ("inline", "http://api.test", "https://api.test"),
+        ("nomad", "https:///api.test", "https://api.test"),
+    ],
+)
+def test_production_authoring_rejects_unusable_nomad_callback(
+    monkeypatch: pytest.MonkeyPatch, executor: str, override: str, fallback: str
+) -> None:
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://test:test@localhost/test")
+    monkeypatch.setenv("AUTHORING_EXECUTOR", executor)
+    monkeypatch.setenv("AUTHORING_NOMAD_CONTAINER_IMAGE", "example/worker:revision")
+    monkeypatch.setenv("AUTHORING_NOMAD_CALLBACK_BASE_URL", override)
+    monkeypatch.setenv("NOMAD_CALLBACK_BASE_URL", fallback)
+
+    with pytest.raises(ValidationError, match="HTTPS callback URL"):
+        Settings()
+
+
+@pytest.mark.parametrize(
+    ("environment", "executor", "image", "override", "fallback", "expected"),
+    [
+        (
+            "production",
+            "nomad",
+            "example/worker:revision",
+            "",
+            "https://api.test",
+            "https://api.test",
+        ),
+        ("production", "inline", "", "", "http://api.test", "http://api.test"),
+        (
+            "development",
+            "nomad",
+            "example/worker:revision",
+            "",
+            "http://api.test",
+            "http://api.test",
+        ),
+        (
+            "production",
+            "nomad",
+            "example/worker:revision",
+            "https://api.test/backend",
+            "http://api.test",
+            "https://api.test/backend",
+        ),
+    ],
+)
+def test_authoring_uses_effective_nomad_callback(
+    monkeypatch: pytest.MonkeyPatch,
+    environment: str,
+    executor: str,
+    image: str,
+    override: str,
+    fallback: str,
+    expected: str,
+) -> None:
+    monkeypatch.setenv("APP_ENV", environment)
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://test:test@localhost/test")
+    monkeypatch.setenv("AUTHORING_EXECUTOR", executor)
+    monkeypatch.setenv("AUTHORING_NOMAD_CONTAINER_IMAGE", image)
+    monkeypatch.setenv("AUTHORING_NOMAD_CALLBACK_BASE_URL", override)
+    monkeypatch.setenv("NOMAD_CALLBACK_BASE_URL", fallback)
+
+    settings = Settings()
+    assert (
+        settings.authoring.effective_nomad_callback_base_url(settings.nomad.callback_base_url)
+        == expected
+    )
 
 
 def test_settings_test_environment(monkeypatch: pytest.MonkeyPatch) -> None:

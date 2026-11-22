@@ -12,6 +12,7 @@ from edcraft_backend.config.settings import AuthoringSettings
 from edcraft_backend.schemas.ai_authoring import SubmitAuthoringJobRequest
 from edcraft_backend.services.ai_authoring_runtime import JobRuntime
 from edcraft_backend.services.ai_authoring_service import AiAuthoringService
+from edcraft_backend.services.ai_authoring_store import AuthoringStore
 from edcraft_backend.services.provider_endpoint import ResolvedConnection
 
 
@@ -21,7 +22,8 @@ async def test_submit_defaults_relevance_to_the_configured_judge(
 ) -> None:
     monkeypatch.setenv("EDCRAFT_JUDGE_PROVIDER", "soclaas")
     monkeypatch.setenv("EDCRAFT_JUDGE_MODEL", "x-test-3")
-    service = AiAuthoringService(AuthoringSettings(storage_dir=tmp_path / "authoring"))
+    settings = AuthoringSettings(storage_dir=tmp_path / "authoring")
+    service = AiAuthoringService(settings, store=AuthoringStore(settings))
     author = ResolvedConnection.for_judge(provider="openai", model="gpt-5-mini")
     captured: dict[str, object] = {}
 
@@ -55,6 +57,7 @@ def test_an_invalid_configured_judge_yields_no_default(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("EDCRAFT_JUDGE_PROVIDER", "not-a-provider")
-    service = AiAuthoringService(AuthoringSettings(storage_dir=tmp_path / "authoring"))
+    settings = AuthoringSettings(storage_dir=tmp_path / "authoring")
+    service = AiAuthoringService(settings, store=AuthoringStore(settings))
 
     assert service._configured_judge() is None

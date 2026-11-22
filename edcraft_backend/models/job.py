@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import StrEnum
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, ForeignKey, String, Text
+from sqlalchemy import DateTime, ForeignKey, Index, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -29,18 +29,33 @@ class JobType(StrEnum):
     QUESTION_FROM_TEMPLATE = "question_from_template"
     ASSESSMENT_FROM_TEMPLATE = "assessment_from_template"
     GENERATE_INPUTS = "generate_inputs"
+    AI_AUTHORING = "ai_authoring"
 
 
 class Job(Base):
     """Tracks the status and result of a Nomad batch job."""
 
     __tablename__ = "jobs"
+    __table_args__ = (
+        Index(
+            "ix_jobs_authoring_owner_created",
+            "user_id",
+            "created_at",
+            "id",
+            postgresql_where=text("type = 'ai_authoring'"),
+        ),
+        Index(
+            "ix_jobs_authoring_status_created",
+            "status",
+            "created_at",
+            "id",
+            postgresql_where=text("type = 'ai_authoring'"),
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     type: Mapped[str] = mapped_column(String(50), nullable=False)
-    status: Mapped[str] = mapped_column(
-        String(20), nullable=False, default=JobStatus.QUEUED.value
-    )
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default=JobStatus.QUEUED.value)
     nomad_job_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     result_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -50,9 +65,7 @@ class Job(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-    completed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class JobToken(Base):
@@ -64,9 +77,7 @@ class JobToken(Base):
     job_id: Mapped[UUID] = mapped_column(
         ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    consumed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     revoked: Mapped[bool] = mapped_column(default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

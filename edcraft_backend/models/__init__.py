@@ -1,5 +1,6 @@
 """Database models."""
 
+from edcraft_backend.models.ai_authoring import AuthoringJobData
 from edcraft_backend.models.assessment import Assessment
 from edcraft_backend.models.assessment_template import AssessmentTemplate
 from edcraft_backend.models.base import AssociationBase, Base, EntityBase
@@ -44,4 +45,5 @@ __all__ = [
     "JobStatus",
     "JobToken",
     "JobType",
+    "AuthoringJobData",
 ]

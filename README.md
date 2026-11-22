@@ -52,32 +52,16 @@ Selected-page and keyword retrieval work before the model is installed.
 
 ### Practice generation from course materials
 
-Choose a subject, review the retrieved lecture excerpt, and optionally select one complete
-exam subquestion. The subject narrows the eligible operations. The lecture and exam text
-determine whether a supported operation applies. Glossary recall and table lookup are
-available across subjects when the selected material supports them.
+Choose a subject and topic, review the selected lecture pages, and optionally select
+an exam excerpt as a style reference. Continue to AI Authoring to submit the reviewed
+excerpts with the teacher's request. The model proposes a reusable question and the
+subject checker verifies the answer and distractors. Preview the resulting template
+and its evidence before approving it for seeded question generation.
 
-| Subject | Supported operations from course materials |
-| --- | --- |
-| Programming | Supported C output traces for nested loops, pointer swaps, and recursive reductions |
-| Mathematics | Ratio and limit comparison tests, steepest ascent, and classification of separable quartic critical points |
-| Physics | Steady-current resistor power with resistance in Ω and current in A, and Hooke’s law force magnitude with stiffness in N/m and extension in m within the proportional limit |
-| Chemistry | Smallest whole-number coefficients for a curated acid–base neutralisation equation written with both reactants and products |
-| Biology | Unconditional dominant or recessive phenotype probability in a complete-dominance monohybrid pea-plant cross, with both canonical parent genotypes and the allele pair stated |
-
-For the science operations, include a direct statement of the solving rule in the selected
-lecture text and either the complete exam task or one matching `Example:` or `Worked example:`
-in the lecture.
-For example, a Physics lecture can explain `P = I²R` and include this exercise:
-
-> Worked example: A resistor of resistance 10 Ω carries a steady current of 0.4 A.
-> What power does it dissipate?
-
-Each science batch samples five variants from a finite set of checked classroom cases. It
-keeps the requested operation, excludes the selected example, and rechecks the key and
-distinct options for every generated question. Repeating the same input and seed reproduces
-the batch for the same generator version. The materials workflow supports the operations in
-the table. The separate authoring workflow uses the broader syllabus catalogues.
+The materials API handles PDF extraction, topic suggestions and retrieval. Its retired
+`/materials/propose` and `/materials/generate` endpoints return HTTP 410. The earlier
+fixed-exercise generator is available in Git history at the November 20 production
+revision, `6722868`.
 
 ### 2. Setup environment
 
@@ -228,41 +212,23 @@ GET /jobs/{job_id}
 
 ## 🤖 AI Template Authoring
 
-Issues 48-50 add owner-scoped AI authoring endpoints under `/ai-authoring`.
-The backend uses the pinned `edcraft-validator` workflow in a bounded
-in-process runner (one active job, ten waiting) and persists state as files,
-not database rows. Run exactly one backend process (one Uvicorn worker/replica)
-against each authoring storage volume: the process-local lock, admission
-counters and startup reconciliation are not multi-process safe.
+The existing `/ai-authoring` endpoints store owner-scoped jobs in PostgreSQL.
+The shared `jobs` table tracks execution. The linked `authoring_job_data` row
+preserves the reviewed request, exact artifact and report bytes, their hashes,
+the teacher's decision, and seeded generation metadata. Apply Alembic migrations
+before starting the API.
 
-Configure at least one server-side model profile in `.env.development`:
+The default `AUTHORING_EXECUTOR=inline` runs the validator locally. Set
+`AUTHORING_EXECUTOR=nomad` to schedule one pinned authoring worker per attempt.
+Both modes use database-backed admission. With the default settings at most four
+jobs run globally and two per owner. Users configure model keys under **Settings →
+Model connections**. Replicas must share a stable `AUTHORING_ENCRYPTION_KEY` to
+decrypt provider credentials and outstanding job context.
 
-```bash
-AUTHORING_MODEL_PROFILES=[{"id":"default","label":"Default code author","provider":"soclaas","model":"x-test-2"}]
-AUTHORING_STORAGE_DIR=.data/authoring
-```
-
-Server profiles are the legacy fallback. Users can instead bring their own
-OpenAI or SocLaas key under **Settings → Model connections**. The backend
-stores only an encrypted key (never plaintext) and returns safe metadata such
-as the key's last four characters. Keys are decrypted in memory for a single
-job and are never written to job records or logs. Set a stable
-`AUTHORING_ENCRYPTION_KEY` in production (generate with
-`openssl rand -hex 32`); when omitted, the installation `JWT_SECRET` is used.
-Changing the encryption key makes existing connections undecryptable.
-
-Provider credentials for server profiles remain in the provider-specific
-environment. They are never returned by the API. Docker Compose mounts the
-durable `authoring_data` volume at `/app/.data`, and the image runs as the
-non-root `edcraft` user. Files are written atomically with `os.replace`;
-startup marks interrupted queued/running jobs failed with `SERVER_RESTARTED`
-instead of replaying them.
-
-Advisory difficulty and relevance checks use the same model and credentials as
-the selected authoring model, so BYOK jobs are billed entirely to the caller's
-key. `EDCRAFT_JUDGE_REASONING_EFFORT` and `EDCRAFT_RELEVANCE_THRESHOLD` still
-configure those checks; `EDCRAFT_JUDGE_PROVIDER`/`MODEL` only affect direct
-CLI or MCP use of `edcraft-validator`.
+The [AI Authoring deployment runbook](docs/ai-authoring-deployment.md) covers the
+archive, empty database cutover, Nomad worker settings, smoke tests and rollback.
+Compose uses a separate volume for the optional material embedding cache.
+Repopulate it with the local demo setup command if needed.
 
 ## 🖥️ WSL2 Nomad Setup
 

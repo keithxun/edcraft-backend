@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
+from inspect import iscoroutinefunction
 from typing import Any, cast
 from uuid import UUID, uuid4
 
@@ -34,6 +36,7 @@ from edcraft_backend.config.settings import (
     AuthoringProfileSettings,
     AuthoringSettings,
 )
+from edcraft_backend.executors.nomad_authoring import NomadAuthoringExecutor
 from edcraft_backend.schemas.ai_authoring import (
     ApprovalRequest,
     ApprovalResponse,
@@ -57,6 +60,11 @@ from edcraft_backend.schemas.ai_authoring import (
     ValidationLimits,
 )
 from edcraft_backend.schemas.provider_connection import ProviderConnectionResponse
+from edcraft_backend.services.ai_authoring_dispatch import (
+    AuthoringWorkerUnauthorized,
+    DurableAuthoringLifecycle,
+)
+from edcraft_backend.services.ai_authoring_dispatch_store import DurableAuthoringStore
 from edcraft_backend.services.ai_authoring_lifecycle import AuthoringLifecycle
 from edcraft_backend.services.ai_authoring_runner import run_library_authoring_job
 from edcraft_backend.services.ai_authoring_runtime import (
@@ -85,19 +93,29 @@ MAX_FINDING_TEXT = 2_000
 
 
 class AiAuthoringService:
-    """Thin integration layer over the pinned AI library and file store."""
+    """Apply authoring, review and generation rules over durable storage."""
 
     def __init__(
         self,
         settings: AuthoringSettings,
         *,
-        store: AuthoringStore | None = None,
+        store: AuthoringStore | DurableAuthoringStore | None = None,
         executor: JobExecutor | None = None,
+        nomad: NomadAuthoringExecutor | None = None,
     ) -> None:
         self.settings = settings
-        self.store = store or AuthoringStore(settings)
+        self.store = store if store is not None else DurableAuthoringStore()
         self._executor: JobExecutor = executor or run_library_authoring_job
-        self.lifecycle = AuthoringLifecycle(self.store, settings)
+        self.lifecycle: AuthoringLifecycle | DurableAuthoringLifecycle = (
+            DurableAuthoringLifecycle(self.store, settings, self._executor, nomad=nomad)
+            if isinstance(self.store, DurableAuthoringStore)
+            else AuthoringLifecycle(self.store, settings)
+        )
+
+    def worker_lifecycle(self) -> DurableAuthoringLifecycle:
+        if not isinstance(self.lifecycle, DurableAuthoringLifecycle):
+            raise AuthoringWorkerUnauthorized()
+        return self.lifecycle
 
     async def startup(self) -> None:
         """Prepare storage, reconcile interruptions and bind the lifecycle."""
@@ -228,10 +246,18 @@ class AiAuthoringService:
         return await self.lifecycle.submit(job, command, runtime)
 
     async def list_jobs(self, owner_id: UUID) -> list[StoredJob]:
-        return await asyncio.to_thread(self.store.list_jobs, owner_id)
+        return await self._call_store(self.store.list_jobs, owner_id)
 
     async def get_job(self, owner_id: UUID, job_id: UUID) -> StoredJob:
-        return await asyncio.to_thread(self.store.get_owned_job, job_id, owner_id)
+        return await self._call_store(self.store.get_owned_job, job_id, owner_id)
+
+    @staticmethod
+    async def _call_store[**P, T](
+        method: Callable[P, T | Awaitable[T]], *args: P.args, **kwargs: P.kwargs
+    ) -> T:
+        if iscoroutinefunction(method):
+            return await cast(Callable[P, Awaitable[T]], method)(*args, **kwargs)
+        return await asyncio.to_thread(cast(Callable[P, T], method), *args, **kwargs)
 
     async def wait_for_idle(self) -> None:
         """Expose deterministic completion to focused tests."""
@@ -244,7 +270,7 @@ class AiAuthoringService:
         report: AuthoringResult | None = None
         artifact: ValidatedTemplateArtifact | None = None
         if job.artifact_sha256 and job.artifact_id:
-            evidence = await asyncio.to_thread(
+            evidence = await self._call_store(
                 self.store.read_evidence,
                 job_id,
                 owner_id=owner_id,
@@ -255,7 +281,7 @@ class AiAuthoringService:
             artifact = _validated_artifact(domain, evidence.artifact_bytes)
         elif job.state in {"completed", "failed"}:
             try:
-                report = await asyncio.to_thread(self.store.read_report, job_id)
+                report = await self._call_store(self.store.read_report, job_id, owner_id=owner_id)
             except AuthoringConflict:
                 report = None
 
@@ -307,7 +333,7 @@ class AiAuthoringService:
 
     async def preview(self, owner_id: UUID, job_id: UUID, seed: int) -> PreviewResponse:
         """Generate one deterministic draft locally without model or MCP calls."""
-        evidence = await asyncio.to_thread(
+        evidence = await self._call_store(
             self.store.read_evidence,
             job_id,
             owner_id=owner_id,
@@ -333,7 +359,7 @@ class AiAuthoringService:
         request: ApprovalRequest,
     ) -> ApprovalResponse:
         """Persist the current decision when the exact artifact is usable."""
-        await asyncio.to_thread(
+        await self._call_store(
             self.store.read_evidence,
             job_id,
             owner_id=owner_id,
@@ -348,7 +374,7 @@ class AiAuthoringService:
             note=request.note,
             decided_at=_now(),
         )
-        updated = await asyncio.to_thread(self.store.save_approval, job_id, approval)
+        updated = await self._call_store(self.store.save_approval, job_id, approval)
         view = self._approval_view(updated.approval)
         if view is None:
             raise AuthoringConflict("The approval decision could not be saved.")
@@ -364,7 +390,7 @@ class AiAuthoringService:
         limit = min(self.settings.max_quantity, 50)
         if request.quantity > limit:
             raise AuthoringValidationError(f"Quantity must be at most {limit} for this server.")
-        evidence = await asyncio.to_thread(
+        evidence = await self._call_store(
             self.store.read_evidence,
             job_id,
             owner_id=owner_id,
@@ -398,8 +424,12 @@ class AiAuthoringService:
             )
         if job.artifact_id is None or job.artifact_sha256 is None:
             raise AuthoringConflict("The validated artifact is unavailable.")
+        if evidence.approval is None:
+            raise AuthoringConflict(
+                "The exact artifact must remain approved while generating questions."
+            )
         created_at = _now()
-        await asyncio.to_thread(
+        await self._call_store(
             self.store.save_generation,
             job.job_id,
             GenerationMetadata(
@@ -412,6 +442,8 @@ class AiAuthoringService:
                 warnings=warnings,
                 created_at=created_at,
             ),
+            owner_id=owner_id,
+            expected_approval=evidence.approval,
         )
         return GeneratedQuestionsBatch(
             job_id=job.job_id,

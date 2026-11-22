@@ -1,9 +1,7 @@
-"""Owner-scoped, file-backed persistence for AI authoring jobs.
+"""Owner-scoped authoring records, evidence rules and legacy file persistence.
 
-The store is intentionally small: one JSON record per job, plus the exact
-validated artifact and the full server-only authoring report. All writes use a
-same-directory temporary file, fsync and :func:`os.replace`. Paths are derived
-only from canonical UUIDs.
+The file store supports isolated tests that exercise the original lifecycle.
+It writes one JSON record per job and saves the artifact and report separately.
 """
 
 from __future__ import annotations
@@ -74,7 +72,7 @@ class AuthoringConflict(AuthoringStoreError):
 
 
 class AuthoringStorageUnavailable(AuthoringStoreError):
-    """The configured durable volume cannot be written."""
+    """The configured authoring storage is unavailable."""
 
     def __init__(self, message: str) -> None:
         super().__init__(message, 503)
@@ -156,7 +154,7 @@ class AuthoringEvidence:
 
 
 class AuthoringStore:
-    """Thread-safe durable store using atomic, UUID-derived paths."""
+    """Legacy file store with atomic writes to UUID-derived paths."""
 
     def __init__(self, settings: AuthoringSettings) -> None:
         self.root = Path(settings.storage_dir)
@@ -258,50 +256,17 @@ class AuthoringStore:
     def complete_job(self, job_id: UUID, report: AuthoringResult) -> StoredJob:
         """Persist the exact artifact, full report and safe job outcome."""
         with self._lock:
-            job = self._load_job(job_id)
-            if job.state not in {"queued", "running"}:
-                raise AuthoringConflict("Authoring job is already finished.")
-
-            summary = summarize_authoring(report)
-            artifact = report.artifact
-            artifact_sha256: str | None = None
-            if report.status == "checked":
-                if artifact is None or artifact.artifact_id is None:
-                    raise AuthoringConflict("Checked authoring report did not contain an artifact.")
-                artifact_bytes = artifact.model_dump_json().encode()
-                artifact_sha256 = hashlib.sha256(artifact_bytes).hexdigest()
+            updated, artifact_bytes, report_bytes = completed_job(self._load_job(job_id), report)
+            if artifact_bytes is not None:
                 self._write_artifact(job_id, artifact_bytes)
 
             try:
-                report_bytes = report.model_dump_json().encode()
                 self._write_bytes(self._report_path(job_id), report_bytes, overwrite=True)
             except Exception:
-                if report.status == "checked":
+                if artifact_bytes is not None:
                     self._artifact_path(job_id).unlink(missing_ok=True)
                 raise
 
-            now = _now()
-            state: JobState = "failed" if report.status == "error" else "completed"
-            error = summary.error
-            if state == "failed" and error is None:
-                error = PublicAuthoringError(
-                    code="AUTHORING_FAILED",
-                    message="Authoring stopped without a usable artifact.",
-                )
-            updated = job.model_copy(
-                update={
-                    "state": state,
-                    "progress": None,
-                    "result": summary,
-                    "artifact_id": (artifact.artifact_id if report.status == "checked" else None),
-                    "artifact_sha256": artifact_sha256,
-                    "error": error if state == "failed" else None,
-                    "approval": None,
-                    "last_generation": None,
-                    "updated_at": now,
-                    "finished_at": now,
-                }
-            )
             self._write_job_unlocked(updated)
             return updated
 
@@ -328,6 +293,8 @@ class AuthoringStore:
         """Replace the current decision when the exact checked evidence still matches."""
 
         def mutate(job: StoredJob) -> StoredJob:
+            if job.owner_id != approval.reviewer_id:
+                raise AuthoringNotFound("Authoring job not found.")
             if approval.artifact_sha256 != job.artifact_sha256:
                 raise AuthoringConflict("The artifact changed; refresh the review before deciding.")
             self._read_evidence(
@@ -339,10 +306,19 @@ class AuthoringStore:
 
         return self._mutate(job_id, mutate)
 
-    def save_generation(self, job_id: UUID, metadata: GenerationMetadata) -> StoredJob:
+    def save_generation(
+        self,
+        job_id: UUID,
+        metadata: GenerationMetadata,
+        *,
+        owner_id: UUID | None = None,
+        expected_approval: ApprovalRecord | None = None,
+    ) -> StoredJob:
         """Record batch metadata only while the exact approval remains current."""
 
         def mutate(job: StoredJob) -> StoredJob:
+            if owner_id is not None and job.owner_id != owner_id:
+                raise AuthoringNotFound("Authoring job not found.")
             if metadata.artifact_sha256 != job.artifact_sha256:
                 raise AuthoringConflict(
                     "The artifact changed while questions were being generated."
@@ -352,6 +328,10 @@ class AuthoringStore:
                 requirement=EvidenceRequirement.APPROVED,
                 expected_artifact_sha256=metadata.artifact_sha256,
             )
+            if expected_approval is not None and job.approval != expected_approval:
+                raise AuthoringConflict(
+                    "The exact artifact must remain approved while generating questions."
+                )
             return job.model_copy(update={"last_generation": metadata, "updated_at": _now()})
 
         return self._mutate(job_id, mutate)
@@ -365,9 +345,11 @@ class AuthoringStore:
             except OSError as exc:
                 raise AuthoringConflict("The validated artifact is unavailable.") from exc
 
-    def read_report(self, job_id: UUID) -> AuthoringResult:
+    def read_report(self, job_id: UUID, *, owner_id: UUID | None = None) -> AuthoringResult:
         """Read the full server-only report for review projection."""
         with self._lock:
+            if owner_id is not None:
+                self.get_owned_job(job_id, owner_id)
             path = self._report_path(job_id)
             try:
                 raw = path.read_bytes()
@@ -405,83 +387,13 @@ class AuthoringStore:
         expected_artifact_sha256: str | None = None,
     ) -> AuthoringEvidence:
         """Verify persisted evidence; the store lock may already be held."""
-        if requirement in {
-            EvidenceRequirement.REUSABLE,
-            EvidenceRequirement.APPROVED,
-        }:
-            self._require_reusable_state(job)
-        expected = expected_artifact_sha256 or job.artifact_sha256
-        if job.artifact_id is None or job.artifact_sha256 is None:
-            raise AuthoringConflict("Authoring review evidence does not match the job artifact.")
-        if expected is None or job.artifact_sha256 != expected:
-            raise AuthoringConflict(self._artifact_changed_message(requirement))
-        # Raw artifact bytes are authoritative; re-serialising the report's
-        # model would make reuse depend on the library's JSON formatting.
-        artifact_bytes = self.read_artifact(job.job_id)
-        artifact_digest = hashlib.sha256(artifact_bytes).hexdigest()
-        if artifact_digest != expected:
-            raise AuthoringConflict(
-                "The stored artifact failed its integrity check; refresh the review."
-            )
-        try:
-            domain = create_domain(job.request.domain)
-            artifact = load_artifact(domain, artifact_bytes)
-        except (ValidationError, ValueError) as exc:
-            raise AuthoringConflict("The stored artifact is not usable.") from exc
-        if artifact.artifact_id != job.artifact_id:
-            raise AuthoringConflict("The stored artifact identity does not match.")
-        report = self.read_report(job.job_id)
-        if (
-            job.result is None
-            or job.result.artifact_id != job.artifact_id
-            or report.status != "checked"
-            or report.artifact is None
-            or report.artifact.artifact_id != job.artifact_id
-        ):
-            raise AuthoringConflict("Authoring review evidence does not match the job artifact.")
-        approval = job.approval
-        if requirement is EvidenceRequirement.APPROVED and (
-            approval is None
-            or approval.decision != "approved"
-            or approval.artifact_sha256 != expected
-        ):
-            raise AuthoringConflict(
-                "The exact artifact must remain approved while generating questions."
-            )
-        return AuthoringEvidence(
-            job=job,
-            artifact_bytes=artifact_bytes,
-            artifact=artifact,
-            report=report,
-            approval=approval,
+        return verify_evidence(
+            job,
+            lambda: self.read_artifact(job.job_id),
+            lambda: self.read_report(job.job_id),
+            requirement=requirement,
+            expected_artifact_sha256=expected_artifact_sha256,
         )
-
-    @staticmethod
-    def _require_reusable_state(job: StoredJob) -> None:
-        technical = (
-            [check for check in job.result.checks if not check.advisory]
-            if job.result is not None
-            else []
-        )
-        if (
-            job.state != "completed"
-            or job.result is None
-            or job.result.status != "checked"
-            or job.artifact_id is None
-            or job.artifact_sha256 is None
-            or not technical
-            or any(check.status != "passed" for check in technical)
-        ):
-            raise AuthoringConflict(
-                "Only a technically checked artifact with saved review evidence "
-                "can be previewed, approved or generated."
-            )
-
-    @staticmethod
-    def _artifact_changed_message(requirement: EvidenceRequirement) -> str:
-        if requirement is EvidenceRequirement.APPROVED:
-            return "The artifact changed while questions were being generated."
-        return "The artifact changed; refresh the review before deciding."
 
     def reconcile_startup(self) -> int:
         """Mark prior queued/running jobs failed; never replay model work."""
@@ -582,6 +494,135 @@ def _canonical_uuid(value: UUID) -> str:
         raise AuthoringNotFound("Authoring job not found.")
     return str(value)
 
+
+def completed_job(
+    job: StoredJob, report: AuthoringResult
+) -> tuple[StoredJob, bytes | None, bytes]:
+    """Prepare a terminal record together with its exact evidence bytes."""
+    if job.state not in {"queued", "running"}:
+        raise AuthoringConflict("Authoring job is already finished.")
+
+    artifact_bytes: bytes | None = None
+    artifact_id: str | None = None
+    artifact_sha256: str | None = None
+    if report.status == "checked":
+        artifact = report.artifact
+        if artifact is None or artifact.artifact_id is None:
+            raise AuthoringConflict("Checked authoring report did not contain an artifact.")
+        artifact_id = artifact.artifact_id
+        artifact_bytes = artifact.model_dump_json().encode()
+        artifact_sha256 = hashlib.sha256(artifact_bytes).hexdigest()
+
+    summary = summarize_authoring(report)
+    now = _now()
+    state: JobState = "failed" if report.status == "error" else "completed"
+    error = None
+    if state == "failed":
+        error = summary.error or PublicAuthoringError(
+            code="AUTHORING_FAILED",
+            message="Authoring stopped without a usable artifact.",
+        )
+    updated = job.model_copy(
+        update={
+            "state": state,
+            "progress": None,
+            "result": summary,
+            "artifact_id": artifact_id,
+            "artifact_sha256": artifact_sha256,
+            "error": error,
+            "approval": None,
+            "last_generation": None,
+            "updated_at": now,
+            "finished_at": now,
+        }
+    )
+    return updated, artifact_bytes, report.model_dump_json().encode()
+
+
+def verify_evidence(
+    job: StoredJob,
+    read_artifact: Callable[[], bytes],
+    read_report: Callable[[], AuthoringResult],
+    *,
+    requirement: EvidenceRequirement,
+    expected_artifact_sha256: str | None = None,
+) -> AuthoringEvidence:
+    """Check the artifact, report and approval for the requested use."""
+    if requirement in {
+        EvidenceRequirement.REUSABLE,
+        EvidenceRequirement.APPROVED,
+    }:
+        _require_reusable_state(job)
+    expected = expected_artifact_sha256 or job.artifact_sha256
+    if job.artifact_id is None or job.artifact_sha256 is None:
+        raise AuthoringConflict("Authoring review evidence does not match the job artifact.")
+    if expected is None or job.artifact_sha256 != expected:
+        raise AuthoringConflict(_artifact_changed_message(requirement))
+    # Raw artifact bytes are authoritative; re-serialising the report's
+    # model would make reuse depend on the library's JSON formatting.
+    artifact_bytes = read_artifact()
+    artifact_digest = hashlib.sha256(artifact_bytes).hexdigest()
+    if artifact_digest != expected:
+        raise AuthoringConflict(
+            "The stored artifact failed its integrity check; refresh the review."
+        )
+    try:
+        domain = create_domain(job.request.domain)
+        artifact = load_artifact(domain, artifact_bytes)
+    except (ValidationError, ValueError) as exc:
+        raise AuthoringConflict("The stored artifact is not usable.") from exc
+    if artifact.artifact_id != job.artifact_id:
+        raise AuthoringConflict("The stored artifact identity does not match.")
+    report = read_report()
+    if (
+        job.result is None
+        or job.result.artifact_id != job.artifact_id
+        or report.status != "checked"
+        or report.artifact is None
+        or report.artifact.artifact_id != job.artifact_id
+    ):
+        raise AuthoringConflict("Authoring review evidence does not match the job artifact.")
+    approval = job.approval
+    if requirement is EvidenceRequirement.APPROVED and (
+        approval is None
+        or approval.decision != "approved"
+        or approval.artifact_sha256 != expected
+    ):
+        raise AuthoringConflict(
+            "The exact artifact must remain approved while generating questions."
+        )
+    return AuthoringEvidence(
+        job=job,
+        artifact_bytes=artifact_bytes,
+        artifact=artifact,
+        report=report,
+        approval=approval,
+    )
+
+def _require_reusable_state(job: StoredJob) -> None:
+    technical = (
+        [check for check in job.result.checks if not check.advisory]
+        if job.result is not None
+        else []
+    )
+    if (
+        job.state != "completed"
+        or job.result is None
+        or job.result.status != "checked"
+        or job.artifact_id is None
+        or job.artifact_sha256 is None
+        or not technical
+        or any(check.status != "passed" for check in technical)
+    ):
+        raise AuthoringConflict(
+            "Only a technically checked artifact with saved review evidence "
+            "can be previewed, approved or generated."
+        )
+
+def _artifact_changed_message(requirement: EvidenceRequirement) -> str:
+    if requirement is EvidenceRequirement.APPROVED:
+        return "The artifact changed while questions were being generated."
+    return "The artifact changed; refresh the review before deciding."
 
 def _now() -> datetime:
     return datetime.now(UTC)

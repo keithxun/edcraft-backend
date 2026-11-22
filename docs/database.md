@@ -8,6 +8,7 @@ This document provides a detailed overview of the database design and schema use
 - ORM: SQLAlchemy
 - Migrations: Alembic
 
+Set `DATABASE_ECHO=true` to log SQL statements. SQLAlchemy hides bind parameters such as authoring prompts and reports in its statement logs and formatted database errors.
 
 ## 📊 Schema Diagram
 

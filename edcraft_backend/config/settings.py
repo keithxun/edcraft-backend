@@ -3,7 +3,8 @@
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from pydantic import (
     BaseModel,
@@ -200,7 +201,7 @@ class AuthoringProfileSettings(BaseModel):
 
 
 class AuthoringSettings(BaseSettings):
-    """File-backed AI authoring configuration. Env prefix: AUTHORING_"""
+    """AI authoring configuration. Env prefix: AUTHORING_"""
 
     model_config = SettingsConfigDict(
         env_file=None, env_prefix="AUTHORING_", case_sensitive=False, extra="ignore"
@@ -209,10 +210,11 @@ class AuthoringSettings(BaseSettings):
     storage_dir: Path = Field(
         default=Path(".data/authoring"),
         description=(
-            "Durable directory for owner-scoped authoring job records. "
-            "Docker deployments set an absolute path on a mounted volume."
+            "Legacy directory used when opening an archived file store. "
+            "New authoring jobs use PostgreSQL."
         ),
     )
+    executor: Literal["inline", "nomad"] = "inline"
     max_active_jobs: int = Field(default=4, ge=1, le=32)
     max_active_jobs_per_user: int = Field(default=2, ge=1, le=32)
     max_inflight_jobs_per_user: int = Field(default=6, ge=1, le=100)
@@ -222,12 +224,13 @@ class AuthoringSettings(BaseSettings):
     job_timeout_seconds: float = Field(
         default=1800.0,
         gt=0,
-        description=(
-            "Maximum time one inline authoring job may run before it is failed. "
-            "The executor thread cannot be interrupted, so its admission slot "
-            "stays held until that thread returns."
-        ),
+        allow_inf_nan=False,
+        description="Maximum time an execution attempt may run before it is failed.",
     )
+    dispatch_interval_seconds: float = Field(default=2.0, gt=0, allow_inf_nan=False)
+    nomad_container_image: str | None = None
+    nomad_callback_base_url: str | None = None
+    nomad_force_pull: bool = False
     model_profiles: list[AuthoringProfileSettings] = Field(default_factory=list)
     encryption_key: SecretStr | None = Field(
         default=None,
@@ -237,12 +240,22 @@ class AuthoringSettings(BaseSettings):
         ),
     )
 
+    @field_validator("max_active_jobs")
+    @classmethod
+    def cap_active_jobs(cls, configured: int) -> int:
+        """Keep legacy deployments with a higher limit within shared capacity."""
+        return min(configured, 4)
+
     @model_validator(mode="after")
     def require_unique_profiles(self) -> "AuthoringSettings":
         ids = [profile.id for profile in self.model_profiles]
         if len(ids) != len(set(ids)):
             raise ValueError("authoring model profile ids must be unique")
         return self
+
+    def effective_nomad_callback_base_url(self, fallback: str) -> str:
+        """Use the authoring callback origin when it overrides the shared default."""
+        return self.nomad_callback_base_url or fallback
 
 
 class Settings(BaseSettings):
@@ -282,6 +295,30 @@ class Settings(BaseSettings):
         case_sensitive=False,
         extra="ignore",
     )
+
+    @model_validator(mode="after")
+    def require_https_authoring_callback(self) -> "Settings":
+        # Inline replicas with an image can drain outstanding Nomad jobs too.
+        has_nomad_image = bool((self.authoring.nomad_container_image or "").strip())
+        if not self.is_production or (self.authoring.executor != "nomad" and not has_nomad_image):
+            return self
+        callback = self.authoring.effective_nomad_callback_base_url(self.nomad.callback_base_url)
+        try:
+            url = urlsplit(callback)
+            if (
+                url.scheme == "https"
+                and url.hostname
+                and url.port != 0
+                and url.username is None
+                and url.password is None
+                and "?" not in callback
+                and "#" not in callback
+                and not any(char.isspace() for char in callback)
+            ):
+                return self
+        except ValueError:
+            pass
+        raise ValueError("Production AI authoring requires a valid HTTPS callback URL.")
 
     @property
     def is_production(self) -> bool:

@@ -71,9 +71,7 @@ services:
     networks:
       - edcraft-network
     volumes:
-      - authoring_data:/app/.data
-    environment:
-      AUTHORING_STORAGE_DIR: /app/.data/authoring
+      - material_embeddings:/app/.data/material-embedding
     profiles:
       - default
       - demo
@@ -105,7 +103,7 @@ volumes:
     driver: local
   postgres_test_data:
     driver: local
-  authoring_data:
+  material_embeddings:
     driver: local
 
 networks:

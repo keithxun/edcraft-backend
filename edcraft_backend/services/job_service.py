@@ -90,6 +90,12 @@ class JobService:
         if job_token is None:
             raise InvalidTokenError("Invalid or already consumed callback token")
 
+        job = await self.job_repo.get_by_id(job_token.job_id)
+        if job is None:
+            return
+        if job.type == JobType.AI_AUTHORING:
+            raise InvalidTokenError("Invalid or already consumed callback token")
+
         await self.job_token_repo.consume(token)
 
         if error or result_json is None:
@@ -102,10 +108,6 @@ class JobService:
                 result_json=None,
                 error=error,
             )
-            return
-
-        job = await self.job_repo.get_by_id(job_token.job_id)
-        if job is None:
             return
 
         processed_json: str | None = result_json
@@ -136,7 +138,7 @@ class JobService:
         Owned jobs are restricted to the owning user.
         """
         job = await self.job_repo.get_by_id(job_id)
-        if job is None:
+        if job is None or job.type == JobType.AI_AUTHORING:
             raise ResourceNotFoundError("Job", str(job_id))
         if job.user_id is not None and job.user_id != user_id:
             raise UnauthorizedAccessError("Job", str(job_id))

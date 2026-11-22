@@ -10,6 +10,7 @@ from edcraft_backend.config import settings
 engine = create_async_engine(
     str(settings.database.url),
     echo=settings.database.echo,
+    hide_parameters=True,
 )
 
 # Create async session factory

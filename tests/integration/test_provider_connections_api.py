@@ -27,6 +27,7 @@ from edcraft_backend.models.provider_connection import ProviderConnection
 from edcraft_backend.models.user import User
 from edcraft_backend.services import provider_endpoint
 from edcraft_backend.services.ai_authoring_service import AiAuthoringService
+from edcraft_backend.services.ai_authoring_store import AuthoringStore
 from edcraft_backend.services.provider_connection_service import (
     ProviderConnectionInvalid,
 )
@@ -70,15 +71,15 @@ async def create_connection(client: AsyncClient, **overrides: Any) -> dict[str, 
 async def authoring_env(
     tmp_path: Path, executor: StaticExecutor
 ) -> AsyncGenerator[AiAuthoringService, None]:
+    authoring_settings = AuthoringSettings(
+        storage_dir=tmp_path / "authoring",
+        model_profiles=[PROFILE],
+        max_active_jobs=1,
+        max_queue=10,
+        shutdown_timeout_seconds=1.0,
+    )
     service = AiAuthoringService(
-        AuthoringSettings(
-            storage_dir=tmp_path / "authoring",
-            model_profiles=[PROFILE],
-            max_active_jobs=1,
-            max_queue=10,
-            shutdown_timeout_seconds=1.0,
-        ),
-        executor=executor,
+        authoring_settings, store=AuthoringStore(authoring_settings), executor=executor
     )
     await service.startup()
     app.dependency_overrides[get_ai_authoring_service] = lambda: service
