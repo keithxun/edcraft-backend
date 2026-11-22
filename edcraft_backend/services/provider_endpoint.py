@@ -108,7 +108,9 @@ class ResolvedConnection:
             raise ValueError("The authoring role must name a model.")
         return model
 
-    def open_provider(self) -> ManagedProvider:
+    def open_provider(
+        self, *, timeout_seconds: float | None = None, max_retries: int = 1
+    ) -> ManagedProvider:
         """Build a fresh provider; the secret stays inside this value."""
         if self.api_key is None:
             raise ValueError("A server profile does not carry a provider secret.")
@@ -116,9 +118,12 @@ class ResolvedConnection:
         return endpoint.open_provider(
             self.api_key,
             self.model,
-            timeout_seconds=DEFAULT_TIMEOUT_SECONDS.get(
-                self.selection.provider, 120.0
+            timeout_seconds=(
+                timeout_seconds
+                if timeout_seconds is not None
+                else DEFAULT_TIMEOUT_SECONDS.get(self.selection.provider, 120.0)
             ),
+            max_retries=max_retries,
         )
 
 
@@ -255,6 +260,7 @@ class ProviderEndpoint:
         model: str,
         *,
         timeout_seconds: float,
+        max_retries: int = 1,
     ) -> ManagedProvider:
         """Build a fresh provider for one job; secrets stay in this closure."""
         # Re-run the resolved-host guard at job time so a stored hostname
@@ -264,7 +270,7 @@ class ProviderEndpoint:
             api_key=api_key,
             base_url=self.base_url,
             timeout=timeout_seconds,
-            max_retries=1,
+            max_retries=max_retries,
             # Base URLs are user-supplied. A redirect could otherwise point
             # the SDK at a private address after the guard above has passed.
             http_client=DefaultHttpxClient(follow_redirects=False),

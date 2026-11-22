@@ -225,6 +225,15 @@ relevance alone. The teacher's selection takes precedence. The SoCLaaS
 `x-test-2` difficulty check uses low reasoning effort when its first
 classification needs a follow-up assessment.
 
+Before submission, the form checks whether each judge returns token probabilities
+for its answer. The probes use short synthetic prompts and reuse recent results.
+If a judge is incompatible, the form names the fallback for the affected check.
+The question-writing model stays selected. Set `AUTHORING_DECISION_FALLBACK_PROVIDER`
+and `AUTHORING_DECISION_FALLBACK_MODEL` to change the server fallback from
+`soclaas` / `x-test-2`. Configure the corresponding server credential. A temporary
+provider failure is shown as unverified. An unusable decision during a job can
+try the fallback once. The report records the model that judged the question.
+
 The default `AUTHORING_EXECUTOR=inline` runs the validator locally. Set
 `AUTHORING_EXECUTOR=nomad` to schedule one pinned authoring worker per attempt.
 Both modes use database-backed admission. With the default settings at most four

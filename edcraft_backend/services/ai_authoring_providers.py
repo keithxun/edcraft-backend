@@ -9,6 +9,7 @@ from edcraft_validator.llm.llm_contracts import (
     ModelProvider,
     StructuredGenerationRequest,
 )
+from edcraft_validator.llm.llm_errors import DecisionCapabilityError
 from openai import OpenAI
 
 
@@ -41,7 +42,7 @@ class ManagedProvider:
         """Expose the delegate's forced classification for advisory checks."""
         decide = getattr(self._delegate, "decide", None)
         if not callable(decide):
-            raise ValueError("Provider does not support token-probability decisions")
+            raise DecisionCapabilityError("Provider does not support token-probability decisions")
         decision: ClassDecision = decide(messages, labels)
         return decision
 

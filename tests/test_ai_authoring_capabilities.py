@@ -16,6 +16,7 @@ from edcraft_backend.services.ai_authoring_store import AuthoringStore
 from edcraft_backend.services.provider_endpoint import ResolvedConnection
 
 
+@pytest.mark.usefixtures("offline_judge_probes")
 @pytest.mark.asyncio
 @pytest.mark.parametrize("configured", [True, False])
 async def test_submit_uses_only_an_explicit_relevance_default(
@@ -33,7 +34,7 @@ async def test_submit_uses_only_an_explicit_relevance_default(
 
     def fake_prepare(request: SubmitAuthoringJobRequest, **kwargs: object) -> SimpleNamespace:
         captured.update(kwargs)
-        return SimpleNamespace(author=author)
+        return SimpleNamespace(author=author, difficulty=author, relevance=author)
 
     async def fake_submit(job: object, command: object, runtime: object) -> object:
         return job

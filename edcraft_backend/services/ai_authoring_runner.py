@@ -26,6 +26,7 @@ def run_library_authoring_job(
     tool_client = build_model_tool_client(
         difficulty=runtime.difficulty,
         relevance=runtime.relevance,
+        decision_fallback=runtime.decision_fallback,
     )
 
     def application_factory() -> TemplateApplication:

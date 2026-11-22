@@ -3,7 +3,7 @@
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 
 from pydantic import (
@@ -11,6 +11,7 @@ from pydantic import (
     Field,
     PostgresDsn,
     SecretStr,
+    StringConstraints,
     field_validator,
     model_validator,
 )
@@ -232,6 +233,10 @@ class AuthoringSettings(BaseSettings):
     nomad_callback_base_url: str | None = None
     nomad_force_pull: bool = False
     model_profiles: list[AuthoringProfileSettings] = Field(default_factory=list)
+    decision_fallback_provider: Literal["openai", "soclaas"] = "soclaas"
+    decision_fallback_model: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)
+    ] = "x-test-2"
     encryption_key: SecretStr | None = Field(
         default=None,
         description=(

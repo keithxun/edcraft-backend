@@ -1,6 +1,6 @@
 """Owner-scoped AI authoring endpoints for issues 48-50."""
 
-from typing import Any
+from typing import Any, TypedDict
 from uuid import UUID
 
 from fastapi import APIRouter, status
@@ -23,10 +23,13 @@ from edcraft_backend.schemas.ai_authoring import (
     ErrorResponse,
     GeneratedQuestionsBatch,
     GenerateRequest,
+    JudgeCompatibilityRequest,
+    JudgeCompatibilityResponse,
     PreviewRequest,
     PreviewResponse,
     SubmitAuthoringJobRequest,
 )
+from edcraft_backend.services.provider_connection_service import ProviderConnectionService
 from edcraft_backend.services.provider_endpoint import ResolvedConnection
 
 # FastAPI keeps its standard HTTPValidationError 422 body for request
@@ -62,6 +65,50 @@ async def get_capabilities(
     return await service.capabilities(await connections.list_connections(user.id))
 
 
+class _ResolvedModelConnections(TypedDict):
+    author_connection: ResolvedConnection | None
+    difficulty_connection: ResolvedConnection | None
+    relevance_connection: ResolvedConnection | None
+
+
+async def _resolve_model_connections(
+    payload: JudgeCompatibilityRequest,
+    owner_id: UUID,
+    connections: ProviderConnectionService,
+) -> _ResolvedModelConnections:
+    async def resolve_connection(
+        selection: AuthoringModelSelection | None,
+    ) -> ResolvedConnection | None:
+        if selection is None or selection.connection_id is None:
+            return None
+        return await connections.resolve(
+            owner_id, selection.connection_id, selection.model
+        )
+
+    judges = payload.judges
+    return _ResolvedModelConnections(
+        author_connection=await resolve_connection(payload),
+        difficulty_connection=await resolve_connection(
+            judges.difficulty if judges else None
+        ),
+        relevance_connection=await resolve_connection(
+            judges.relevance if judges else None
+        ),
+    )
+
+
+@router.post("/judge-compatibility", response_model=JudgeCompatibilityResponse)
+async def check_judge_compatibility(
+    payload: JudgeCompatibilityRequest,
+    user: CurrentUserDep,
+    service: AiAuthoringServiceDep,
+    connections: ProviderConnectionServiceDep,
+) -> JudgeCompatibilityResponse:
+    """Check the chosen advisory models without sending question data."""
+    resolved = await _resolve_model_connections(payload, user.id, connections)
+    return await service.judge_compatibility(payload, **resolved)
+
+
 @router.post(
     "/jobs",
     response_model=AuthoringJobSubmittedResponse,
@@ -74,33 +121,8 @@ async def submit_job(
     connections: ProviderConnectionServiceDep,
 ) -> AuthoringJobSubmittedResponse:
     """Admit one authoring job and return its polling URL."""
-
-    async def resolve_connection(
-        selection: AuthoringModelSelection | None,
-    ) -> ResolvedConnection | None:
-        if selection is None or selection.connection_id is None:
-            return None
-        return await connections.resolve(
-            user.id, selection.connection_id, selection.model
-        )
-
-    author_connection = None
-    if payload.connection_id is not None:
-        author_connection = await connections.resolve(
-            user.id, payload.connection_id, payload.model
-        )
-    judges = payload.judges
-    job = await service.submit(
-        user.id,
-        payload,
-        author_connection=author_connection,
-        difficulty_connection=await resolve_connection(
-            judges.difficulty if judges else None
-        ),
-        relevance_connection=await resolve_connection(
-            judges.relevance if judges else None
-        ),
-    )
+    resolved = await _resolve_model_connections(payload, user.id, connections)
+    job = await service.submit(user.id, payload, **resolved)
     return AuthoringJobSubmittedResponse(
         job_id=job.job_id,
         status_url=f"/ai-authoring/jobs/{job.job_id}",

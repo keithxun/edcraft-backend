@@ -62,6 +62,8 @@ from tests.ai_authoring_helpers import (
     run_scripted_pipeline,
 )
 
+pytestmark = pytest.mark.usefixtures("offline_judge_probes")
+
 PROFILE = AuthoringProfileSettings(
     id="test-profile",
     label="Test author",

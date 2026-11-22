@@ -109,7 +109,26 @@ class AuthoringJudgeSelections(BaseModel):
     relevance: AuthoringModelSelection | None = None
 
 
-class SubmitAuthoringJobRequest(AuthoringModelSelection):
+class JudgeCompatibilityRequest(AuthoringModelSelection):
+    """Question writer and optional advisory overrides, without question data."""
+
+    judges: AuthoringJudgeSelections | None = None
+
+
+class JudgeCompatibilityResult(BaseModel):
+    """Decision capability and the selected or effective model."""
+
+    status: Literal["compatible", "fallback", "unknown", "unavailable"]
+    provider: str
+    model: str
+
+
+class JudgeCompatibilityResponse(BaseModel):
+    difficulty: JudgeCompatibilityResult
+    relevance: JudgeCompatibilityResult
+
+
+class SubmitAuthoringJobRequest(JudgeCompatibilityRequest):
     """One request to author a reusable question template."""
 
     domain: str = "code"
@@ -117,7 +136,6 @@ class SubmitAuthoringJobRequest(AuthoringModelSelection):
     difficulty: Difficulty
     materials: AuthoringMaterials | None = None
     num_distractors: DistractorCount = DEFAULT_DISTRACTORS
-    judges: AuthoringJudgeSelections | None = None
 
     @field_validator("prompt")
     @classmethod
@@ -396,6 +414,9 @@ __all__ = [
     "GenerateRequest",
     "GeneratedQuestionsBatch",
     "GenerationMetadata",
+    "JudgeCompatibilityRequest",
+    "JudgeCompatibilityResponse",
+    "JudgeCompatibilityResult",
     "JudgeDisplay",
     "PreviewRequest",
     "PreviewResponse",

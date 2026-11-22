@@ -22,7 +22,7 @@ from edcraft_backend.config.settings import AuthoringProfileSettings, AuthoringS
 from edcraft_backend.exceptions import EdCraftBaseException
 from edcraft_backend.schemas.ai_authoring import (
     AuthoringModelSelection,
-    SubmitAuthoringJobRequest,
+    JudgeCompatibilityRequest,
 )
 from edcraft_backend.services.provider_endpoint import (
     DEFAULT_TIMEOUT_SECONDS,
@@ -62,17 +62,19 @@ class JobRuntime:
         author: ResolvedConnection,
         difficulty: ResolvedConnection,
         relevance: ResolvedConnection,
+        decision_fallback: ResolvedConnection | None = None,
         executor: JobExecutor,
     ) -> None:
         self.author = author
         self.difficulty = difficulty
         self.relevance = relevance
+        self.decision_fallback = decision_fallback
         self._executor = executor
 
     @classmethod
     def prepare(
         cls,
-        request: SubmitAuthoringJobRequest,
+        request: JudgeCompatibilityRequest,
         *,
         profile_lookup: Callable[[str], AuthoringProfileSettings],
         executor: JobExecutor,
@@ -121,7 +123,7 @@ class JobRuntime:
 
     @staticmethod
     def _author_role(
-        request: SubmitAuthoringJobRequest,
+        request: AuthoringModelSelection,
         *,
         profile_lookup: Callable[[str], AuthoringProfileSettings],
         connection: ResolvedConnection | None,
@@ -225,6 +227,7 @@ class ExecutionPayload(BaseModel):
     author: ExecutionRole
     difficulty: ExecutionRole
     relevance: ExecutionRole
+    decision_fallback: ExecutionRole | None = None
 
     @classmethod
     def capture(
@@ -233,6 +236,11 @@ class ExecutionPayload(BaseModel):
         return cls(
             command=command,
             author=ExecutionRole.snapshot(runtime.author, remote=remote),
+            decision_fallback=(
+                ExecutionRole.snapshot(runtime.decision_fallback, remote=remote, required=False)
+                if runtime.decision_fallback is not None
+                else None
+            ),
             difficulty=ExecutionRole.snapshot(runtime.difficulty, remote=remote, required=False),
             relevance=ExecutionRole.snapshot(runtime.relevance, remote=remote, required=False),
         )
@@ -242,6 +250,9 @@ class ExecutionPayload(BaseModel):
             author=self.author.connection(),
             difficulty=self.difficulty.connection(),
             relevance=self.relevance.connection(),
+            decision_fallback=(
+                self.decision_fallback.connection() if self.decision_fallback is not None else None
+            ),
             executor=executor,
         )
 
@@ -257,7 +268,9 @@ class ExecutionPayload(BaseModel):
                     ("author", self.author),
                     ("difficulty", self.difficulty),
                     ("relevance", self.relevance),
+                    ("decision_fallback", self.decision_fallback),
                 )
+                if role is not None
             },
         }
 

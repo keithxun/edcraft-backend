@@ -50,6 +50,8 @@ from edcraft_backend.schemas.ai_authoring import (
     GeneratedQuestionsBatch,
     GenerateRequest,
     GenerationMetadata,
+    JudgeCompatibilityRequest,
+    JudgeCompatibilityResponse,
     JudgeDisplay,
     PreviewResponse,
     ReviewAttempt,
@@ -61,6 +63,7 @@ from edcraft_backend.schemas.ai_authoring import (
     ValidationLimits,
 )
 from edcraft_backend.schemas.provider_connection import ProviderConnectionResponse
+from edcraft_backend.services.ai_authoring_compatibility import JudgeCompatibilityProbe
 from edcraft_backend.services.ai_authoring_dispatch import (
     AuthoringWorkerUnauthorized,
     DurableAuthoringLifecycle,
@@ -107,6 +110,7 @@ class AiAuthoringService:
         self.settings = settings
         self.store = store if store is not None else DurableAuthoringStore()
         self._executor: JobExecutor = executor or run_library_authoring_job
+        self._judge_probe = JudgeCompatibilityProbe()
         self.lifecycle: AuthoringLifecycle | DurableAuthoringLifecycle = (
             DurableAuthoringLifecycle(self.store, settings, self._executor, nomad=nomad)
             if isinstance(self.store, DurableAuthoringStore)
@@ -181,6 +185,64 @@ class AiAuthoringService:
             default_distractors=DEFAULT_DISTRACTORS,
         )
 
+    def _prepare_runtime(
+        self,
+        request: JudgeCompatibilityRequest,
+        *,
+        author_connection: ResolvedConnection | None = None,
+        difficulty_connection: ResolvedConnection | None = None,
+        relevance_connection: ResolvedConnection | None = None,
+    ) -> JobRuntime:
+        configured_judge = self._configured_judge()
+        return JobRuntime.prepare(
+            request,
+            profile_lookup=self._profile,
+            executor=self._executor,
+            author_connection=author_connection,
+            difficulty_connection=difficulty_connection,
+            relevance_connection=relevance_connection,
+            judge_default=(
+                ResolvedConnection.for_judge(
+                    provider=configured_judge.provider, model=configured_judge.model
+                )
+                if configured_judge is not None
+                else None
+            ),
+        )
+
+    async def _apply_judge_compatibility(self, runtime: JobRuntime) -> JudgeCompatibilityResponse:
+        fallback = ResolvedConnection.for_judge(
+            provider=self.settings.decision_fallback_provider,
+            model=self.settings.decision_fallback_model,
+        )
+        difficulty, relevance = await asyncio.gather(
+            self._judge_probe.resolve("difficulty", runtime.difficulty, fallback),
+            self._judge_probe.resolve("relevance", runtime.relevance, fallback),
+        )
+        runtime.decision_fallback = fallback
+        if difficulty.status == "fallback":
+            runtime.difficulty = fallback
+        if relevance.status == "fallback":
+            runtime.relevance = fallback
+        return JudgeCompatibilityResponse(difficulty=difficulty, relevance=relevance)
+
+    async def judge_compatibility(
+        self,
+        request: JudgeCompatibilityRequest,
+        *,
+        author_connection: ResolvedConnection | None = None,
+        difficulty_connection: ResolvedConnection | None = None,
+        relevance_connection: ResolvedConnection | None = None,
+    ) -> JudgeCompatibilityResponse:
+        """Check the same resolved roles a new job would use."""
+        runtime = self._prepare_runtime(
+            request,
+            author_connection=author_connection,
+            difficulty_connection=difficulty_connection,
+            relevance_connection=relevance_connection,
+        )
+        return await self._apply_judge_compatibility(runtime)
+
     async def submit(
         self,
         owner_id: UUID,
@@ -192,24 +254,13 @@ class AiAuthoringService:
     ) -> StoredJob:
         """Admit and persist one queued authoring job."""
         domain_request = _domain_request(request)
-        configured_judge = self._configured_judge()
-        judge_default = (
-            ResolvedConnection.for_judge(
-                provider=configured_judge.provider,
-                model=configured_judge.model,
-            )
-            if configured_judge is not None
-            else None
-        )
-        runtime = JobRuntime.prepare(
+        runtime = self._prepare_runtime(
             request,
-            profile_lookup=self._profile,
-            executor=self._executor,
             author_connection=author_connection,
             difficulty_connection=difficulty_connection,
             relevance_connection=relevance_connection,
-            judge_default=judge_default,
         )
+        await self._apply_judge_compatibility(runtime)
         author = runtime.author
         provider = author.selection.provider
         model = author.model

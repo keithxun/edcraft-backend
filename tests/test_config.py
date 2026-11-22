@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from edcraft_backend.config import Environment, Settings, get_project_root, get_settings
+from edcraft_backend.config.settings import AuthoringSettings
 
 
 @pytest.fixture(autouse=True)
@@ -25,6 +26,21 @@ def test_settings_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.is_development is True
     assert settings.is_production is False
     assert settings.is_test is False
+
+
+def test_authoring_decision_fallback_uses_server_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("AUTHORING_DECISION_FALLBACK_PROVIDER", raising=False)
+    monkeypatch.delenv("AUTHORING_DECISION_FALLBACK_MODEL", raising=False)
+    assert AuthoringSettings().decision_fallback_provider == "soclaas"
+    assert AuthoringSettings().decision_fallback_model == "x-test-2"
+
+    monkeypatch.setenv("AUTHORING_DECISION_FALLBACK_PROVIDER", "openai")
+    monkeypatch.setenv("AUTHORING_DECISION_FALLBACK_MODEL", "  compatible-model  ")
+    configured = AuthoringSettings()
+    assert configured.decision_fallback_provider == "openai"
+    assert configured.decision_fallback_model == "compatible-model"
 
 
 def test_database_echo_auto_enable_in_development(

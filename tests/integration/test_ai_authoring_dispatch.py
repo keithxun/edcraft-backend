@@ -43,7 +43,7 @@ from edcraft_backend.services.ai_authoring_store import StoredJob
 from edcraft_backend.services.ai_domains import LIBRARY_REVISION
 from tests.ai_authoring_helpers import StaticExecutor, make_checked_report
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.usefixtures("offline_judge_probes")]
 
 _SUBMISSION = SubmitAuthoringJobRequest(
     prompt="Create a deterministic tracing question",

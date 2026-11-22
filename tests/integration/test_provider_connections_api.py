@@ -42,6 +42,8 @@ from tests.ai_authoring_helpers import StaticExecutor, make_checked_report
 from tests.conftest import _create_test_client
 from tests.factories import create_and_login_user
 
+pytestmark = pytest.mark.usefixtures("offline_judge_probes")
+
 BASE_URL = "https://api.example.com/v1"
 API_KEY = "sk-test-secret-1234"
 PROFILE = AuthoringProfileSettings(
@@ -496,6 +498,32 @@ async def test_capabilities_only_offer_enabled_connections(
         response = await test_client.get("/ai-authoring/capabilities")
         assert response.status_code == 200, response.text
         assert response.json()["connections"] == []
+
+
+async def test_judge_preflight_uses_only_the_callers_connections(
+    test_client: AsyncClient, user: User, db_session: AsyncSession, tmp_path: Path
+) -> None:
+    created = await create_connection(test_client)
+    options = {
+        "connection_id": created["id"],
+        "model": "gpt-test",
+        "judges": {"relevance": {"connection_id": created["id"], "model": "gpt-other"}},
+    }
+    executor = StaticExecutor(make_checked_report)
+    async with authoring_env(tmp_path, executor):
+        checked = await test_client.post("/ai-authoring/judge-compatibility", json=options)
+        assert checked.status_code == 200, checked.text
+        assert checked.json() == {
+            "difficulty": {"status": "compatible", "provider": "openai", "model": "gpt-test"},
+            "relevance": {"status": "compatible", "provider": "openai", "model": "gpt-other"},
+        }
+        assert API_KEY not in checked.text
+        assert BASE_URL not in checked.text
+
+        other = await create_and_login_user(test_client, db_session)
+        assert other.id != user.id
+        inaccessible = await test_client.post("/ai-authoring/judge-compatibility", json=options)
+        assert inaccessible.status_code == 404
 
 
 async def test_submit_uses_connection_credentials(

@@ -7,18 +7,21 @@ from uuid import uuid4
 
 import pytest
 from edcraft_validator.llm.forced_decision import ClassDecision
+from edcraft_validator.llm.judge_configuration import judge_settings_for
 from edcraft_validator.llm.llm_contracts import TemplateProviderSelection
+from edcraft_validator.llm.llm_errors import DecisionCapabilityError
+from edcraft_validator.mcp import job_judges
+from edcraft_validator.mcp.job_judges import SelectedModelDecisionProvider
 
 from edcraft_backend.services import ai_authoring_judge, ai_authoring_runner
 from edcraft_backend.services.ai_authoring_judge import (
-    SelectedModelDecisionProvider,
     build_model_tool_client,
     build_plan_provider,
-    judge_settings_for,
 )
 from edcraft_backend.services.ai_authoring_providers import ManagedProvider
 from edcraft_backend.services.ai_authoring_runtime import (
     AuthoringValidationError,
+    ExecutionPayload,
     JobRuntime,
 )
 from edcraft_backend.services.provider_endpoint import ResolvedConnection
@@ -28,9 +31,7 @@ from tests.ai_authoring_helpers import make_command
 class StubProvider:
     """Minimal provider that records forced classification calls."""
 
-    def __init__(
-        self, *, provider: str = "openai", model: str = "gpt-4.1-mini"
-    ) -> None:
+    def __init__(self, *, provider: str = "openai", model: str = "gpt-4.1-mini") -> None:
         self.provider = provider
         self.model = model
         self.decisions: list[tuple[list[dict], tuple[str, ...]]] = []
@@ -59,9 +60,7 @@ def test_managed_provider_forwards_decisions_and_usage() -> None:
     delegate = StubProvider()
     delegate.last_usage = {"input_tokens": 5}
     client = SimpleNamespace(close=lambda: None)
-    provider = ManagedProvider(
-        delegate, client, provider="openai", model="gpt-4.1-mini"
-    )
+    provider = ManagedProvider(delegate, client, provider="openai", model="gpt-4.1-mini")
 
     decision = provider.decide([], ("yes", "no"))
 
@@ -77,7 +76,7 @@ def test_managed_provider_rejects_delegates_without_decisions() -> None:
         NoDecisions(), SimpleNamespace(close=lambda: None), provider="openai", model="x"
     )
 
-    with pytest.raises(ValueError, match="token-probability"):
+    with pytest.raises(DecisionCapabilityError, match="token-probability"):
         provider.decide([], ("yes", "no"))
 
 
@@ -116,10 +115,8 @@ def test_selected_model_decision_provider_rejects_providers_without_decisions() 
         def generation_settings(self) -> dict[str, str]:
             return {}
 
-    with pytest.raises(ValueError, match="token-probability"):
-        SelectedModelDecisionProvider(
-            judge_settings_for("openai", "gpt-4.1-mini"), NoDecisions()
-        )
+    with pytest.raises(DecisionCapabilityError, match="token-probability"):
+        SelectedModelDecisionProvider(judge_settings_for("openai", "gpt-4.1-mini"), NoDecisions())
 
 
 def test_resolved_connection_repr_hides_api_key() -> None:
@@ -160,9 +157,7 @@ def test_build_plan_provider_uses_a_server_profile(
 ) -> None:
     managed = StubProvider(provider="soclaas", model="x-test-2")
     role = ResolvedConnection(selection=selection("soclaas", "x-test-2"))
-    monkeypatch.setattr(
-        ai_authoring_judge, "create_model_provider", lambda _selection: managed
-    )
+    monkeypatch.setattr(ai_authoring_judge, "create_model_provider", lambda _selection: managed)
 
     assert build_plan_provider(role) is managed
 
@@ -184,9 +179,9 @@ def test_model_tool_client_wires_different_judges(
         ("openai", "gpt-4.1-mini"): relevance_provider,
     }
 
-    monkeypatch.setattr(ai_authoring_judge, "create_validation_server", fake_server)
+    monkeypatch.setattr(job_judges, "create_validation_server", fake_server)
     monkeypatch.setattr(
-        ai_authoring_judge,
+        job_judges,
         "FastMcpToolClient",
         lambda created: SimpleNamespace(server=created),
     )
@@ -212,12 +207,47 @@ def test_model_tool_client_wires_different_judges(
     assert decision_provider.model == "gpt-4.1-mini"
 
 
+def test_only_distinct_judges_get_a_runtime_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    selected = ResolvedConnection.for_judge(provider="openai", model="gpt-5.4-mini")
+    fallback = ResolvedConnection.for_judge(provider="soclaas", model="x-test-2")
+    monkeypatch.setattr(job_judges, "create_validation_server", lambda **kwargs: kwargs)
+    monkeypatch.setattr(job_judges, "FastMcpToolClient", lambda server: server)
+    monkeypatch.setattr(
+        ai_authoring_judge,
+        "build_plan_provider",
+        lambda role: StubProvider(provider=role.selection.provider, model=role.model),
+    )
+    options = build_model_tool_client(
+        difficulty=fallback, relevance=selected, decision_fallback=fallback
+    )
+    assert options["enforce_decision_compatibility"]
+    assert options["difficulty_fallback_provider_factory"] is None
+    assert options["relevance_fallback_provider_factory"]().model == "x-test-2"
+
+
+def test_durable_runtime_preserves_fallback_and_reads_old_payloads() -> None:
+    author = ResolvedConnection.for_judge(provider="openai", model="gpt-5.4-mini")
+    fallback = ResolvedConnection.for_judge(provider="soclaas", model="x-test-2")
+    runtime = JobRuntime(
+        author=author,
+        difficulty=author,
+        relevance=author,
+        decision_fallback=fallback,
+        executor=lambda *_: None,
+    )
+    payload = ExecutionPayload.capture(make_command(), runtime, remote=False)
+    assert payload.runtime(lambda *_: None).decision_fallback == fallback
+    assert (
+        payload.worker_context("revision", 30)["plan"]["decision_fallback"]["model"] == "x-test-2"
+    )
+    old = ExecutionPayload.model_validate(payload.model_dump(exclude={"decision_fallback"}))
+    assert old.runtime(lambda *_: None).decision_fallback is None
+
+
 def test_model_tool_client_requires_named_models() -> None:
     with pytest.raises(AuthoringValidationError, match="name a model"):
         build_model_tool_client(
-            difficulty=ResolvedConnection(
-                selection=TemplateProviderSelection(provider="soclaas")
-            ),
+            difficulty=ResolvedConnection(selection=TemplateProviderSelection(provider="soclaas")),
             relevance=ResolvedConnection(selection=selection("soclaas", "x-test-2")),
         )
 
@@ -246,9 +276,7 @@ def test_runner_profile_path_uses_server_judge_tool_client(
         captured["tool_plan"] = kwargs
         return tool_client
 
-    monkeypatch.setattr(
-        ai_authoring_runner, "build_model_tool_client", fake_tool_client
-    )
+    monkeypatch.setattr(ai_authoring_runner, "build_model_tool_client", fake_tool_client)
     monkeypatch.setattr(ai_authoring_runner, "run_authoring_job_sync", fake_run)
     monkeypatch.setattr(
         ai_authoring_runner,
@@ -262,6 +290,7 @@ def test_runner_profile_path_uses_server_judge_tool_client(
     assert captured["tool_plan"] == {
         "difficulty": runtime.difficulty,
         "relevance": runtime.relevance,
+        "decision_fallback": runtime.decision_fallback,
     }
     assert captured["application_factory"]().tool_client is tool_client
     assert "provider_factory" not in captured

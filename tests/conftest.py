@@ -23,7 +23,14 @@ from edcraft_backend.dependencies import get_job_service  # noqa: E402
 from edcraft_backend.main import app  # noqa: E402
 from edcraft_backend.models.base import Base  # noqa: E402
 from edcraft_backend.models.user import User  # noqa: E402
+from edcraft_backend.services import ai_authoring_compatibility  # noqa: E402
 from tests.mocks import MockJobService  # noqa: E402
+
+
+@pytest.fixture
+def offline_judge_probes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep tests for other authoring concerns independent of model endpoints."""
+    monkeypatch.setattr(ai_authoring_compatibility, "_probe_decision", lambda *_: "compatible")
 
 
 @pytest.fixture(scope="session")
